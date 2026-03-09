@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import UploadScreen from "./components/UploadScreen";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import {
   Zap, Flame, Home, Upload, BarChart2, Settings,
@@ -312,90 +313,6 @@ function Dashboard() {
             </div>
           </div>
         ))}
-      </div>
-    </div>
-  );
-}
-
-function UploadScreen() {
-  const [files, setFiles] = useState([]);
-  const fileRef = useRef(); const imgRef = useRef();
-  const addFile = (f, type) => {
-    setFiles(prev => [...prev, { name:f.name, size:(f.size/1024).toFixed(0)+" KB", status:"analisi...", type }]);
-    setTimeout(() => setFiles(prev => prev.map((x,i) => i===prev.length-1 ? {...x,status:"estratto"} : x)), 2000);
-  };
-  return (
-    <div style={{ display:"flex", flexDirection:"column", gap:16, paddingBottom:8 }}>
-      <div>
-        <p style={{ color:C.textDim, fontSize:12, margin:"0 0 4px", letterSpacing:2, textTransform:"uppercase" }}>Importa</p>
-        <h2 style={{ color:C.text, fontSize:24, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>Carica bolletta</h2>
-      </div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-        <button onClick={() => fileRef.current?.click()} style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:18, padding:"20px 16px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
-          <div style={{ background:C.amberDim, borderRadius:12, padding:12 }}><FileText size={24} color={C.amber} /></div>
-          <div style={{ textAlign:"center" }}>
-            <p style={{ color:C.text, fontSize:13, fontWeight:700, margin:"0 0 3px" }}>Carica PDF</p>
-            <p style={{ color:C.textDim, fontSize:11, margin:0 }}>Dal tuo dispositivo</p>
-          </div>
-        </button>
-        <button onClick={() => imgRef.current?.click()} style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:18, padding:"20px 16px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
-          <div style={{ background:C.skyDim, borderRadius:12, padding:12 }}><Camera size={24} color={C.sky} /></div>
-          <div style={{ textAlign:"center" }}>
-            <p style={{ color:C.text, fontSize:13, fontWeight:700, margin:"0 0 3px" }}>Fotografa</p>
-            <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.4 }}>Scatta o carica<br/>Foto/Screenshot</p>
-          </div>
-        </button>
-      </div>
-      <input ref={fileRef} type="file" accept=".pdf" style={{ display:"none" }} onChange={e=>e.target.files[0]&&addFile(e.target.files[0],"pdf")} />
-      <input ref={imgRef}  type="file" accept="image/*" capture="environment" style={{ display:"none" }} onChange={e=>e.target.files[0]&&addFile(e.target.files[0],"photo")} />
-      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:16 }}>
-        <p style={{ color:C.textMid, fontSize:12, fontWeight:600, margin:"0 0 10px" }}>💡 Come funziona</p>
-        {["Carica il PDF oppure fotografa / fai screenshot della bolletta","L'AI estrae automaticamente prezzi, consumi e POD/PDR","I dati vengono confrontati con i prezzi di mercato"].map((t,i) => (
-          <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, marginBottom:i<2?10:0 }}>
-            <div style={{ background:C.amberDim, borderRadius:"50%", width:20, height:20, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-              <span style={{ color:C.amber, fontSize:10, fontWeight:700 }}>{i+1}</span>
-            </div>
-            <p style={{ color:C.textMid, fontSize:12, margin:0, lineHeight:1.5 }}>{t}</p>
-          </div>
-        ))}
-      </div>
-      {files.length > 0 && (
-        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
-          <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:"0 0 14px" }}>File caricati</p>
-          {files.map((f,i) => (
-            <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:C.surface2, borderRadius:12, padding:"12px 14px", marginBottom:8, border:`1px solid ${C.border2}` }}>
-              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                <div style={{ background:f.type==="pdf"?C.amberDim:C.skyDim, borderRadius:8, padding:7 }}>
-                  {f.type==="pdf"?<FileText size={14} color={C.amber}/>:<Camera size={14} color={C.sky}/>}
-                </div>
-                <div>
-                  <p style={{ color:C.text, fontSize:12, fontWeight:600, margin:0 }}>{f.name}</p>
-                  <p style={{ color:C.textDim, fontSize:10, margin:"2px 0 0" }}>{f.size}</p>
-                </div>
-              </div>
-              <span style={{ background:f.status==="estratto"?C.greenDim:C.amberDim, color:f.status==="estratto"?C.green:C.amber, fontSize:10, borderRadius:20, padding:"3px 10px", fontWeight:700 }}>{f.status}</span>
-            </div>
-          ))}
-          {files.some(f=>f.status==="estratto") && (
-            <div style={{ marginTop:6, background:"#0d1a0d", border:`1px solid ${C.green}33`, borderRadius:14, padding:16 }}>
-              <p style={{ color:C.green, fontSize:13, fontWeight:700, margin:"0 0 12px" }}>✓ Dati estratti</p>
-              {[["POD","IT012E00367605"],["PDR","05260200451415"],["Tariffa Luce","0,12636 €/kWh"],["Tariffa Gas","0,51339 €/Smc"],["Fornitore","A2A Energia"],["Scadenza offerta","31.10.2026"]].map(([k,v]) => (
-                <div key={k} style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
-                  <span style={{ color:C.textDim, fontSize:12 }}>{k}</span>
-                  <span style={{ color:C.text, fontSize:12, fontWeight:600, fontFamily:"monospace" }}>{v}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:16 }}>
-        <p style={{ color:C.textDim, fontSize:11, fontWeight:700, letterSpacing:1.5, margin:"0 0 12px", textTransform:"uppercase" }}>Fornitori supportati</p>
-        <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
-          {["A2A","Enel","Eni","Edison","Hera","Engie","E.ON","Sorgenia","Iren","Acea","Pulsee"].map(p => (
-            <span key={p} style={{ background:C.surface2, border:`1px solid ${C.border2}`, borderRadius:20, padding:"5px 12px", color:C.textMid, fontSize:11 }}>{p}</span>
-          ))}
-        </div>
       </div>
     </div>
   );
