@@ -1,7 +1,15 @@
 // src/components/UploadScreen.jsx
+// PDF  → pdfjs-dist (npm, bundled da Vite) → estrae testo → manda testo al server
+// Immagine → base64 → server
+
 import { useState, useRef } from "react";
 import { Camera, FileText, CheckCircle, AlertCircle, Loader2, Save, RotateCcw } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker?url";
+
+// Configura il worker (Vite lo gestisce automaticamente)
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 const C = {
   bg:"#080808", surface:"#111111", surface2:"#181818",
@@ -13,31 +21,16 @@ const C = {
   text:"#ffffff", textMid:"#9ca3af", textDim:"#4b5563",
 };
 
-// ── Estrae testo da PDF usando pdf.js via CDN ──────────────────────────────
 async function extractPdfText(file) {
-  // Carica pdf.js dal CDN se non già caricato
-  if (!window.pdfjsLib) {
-    await new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-      script.onload = resolve;
-      script.onerror = reject;
-      document.head.appendChild(script);
-    });
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  }
-
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-  let fullText = "";
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let text = "";
   for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    fullText += content.items.map(item => item.str).join(" ") + "\n";
+    text += content.items.map(item => item.str).join(" ") + "\n";
   }
-  return fullText.trim();
+  return text.trim();
 }
 
 function fileToBase64(file) {
@@ -57,39 +50,32 @@ export default function UploadScreen({ user, onBollettaSaved }) {
   const fileRef = useRef();
   const imgRef  = useRef();
 
-  const reset = () => {
-    setFase("idle"); setErrore(null); setDatiEstrat(null); setFileName(null);
-  };
+  const reset = () => { setFase("idle"); setErrore(null); setDatiEstrat(null); setFileName(null); };
 
   const parseFile = async (file) => {
     setFileName(file.name);
     setFase("parsing");
     setErrore(null);
-
     try {
-      const isPdf = file.type === "application/pdf" || file.name.endsWith(".pdf");
+      const isPdf = file.type === "application/pdf" || file.name?.endsWith(".pdf");
       let payload;
 
       if (isPdf) {
-        // Estrai testo nel browser — niente vision richiesta
         const testo = await extractPdfText(file);
-        if (!testo || testo.length < 50) {
-          throw new Error("PDF senza testo selezionabile (è una scansione). Fotografa la bolletta invece.");
-        }
-        payload = { type: "text", text: testo.slice(0, 8000) };
+        if (!testo || testo.length < 50)
+          throw new Error("PDF senza testo selezionabile. Prova a fotografare la bolletta.");
+        payload = { type: "text", text: testo };
       } else {
-        // Immagine — manda base64
         const b64  = await fileToBase64(file);
         const mime = file.type || "image/jpeg";
         payload = { type: "image", mimeType: mime, data: b64 };
       }
 
-      const res = await fetch("/api/parse-bill", {
+      const res  = await fetch("/api/parse-bill", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify(payload),
       });
-
       const json = await res.json();
       if (!res.ok) throw new Error(json.detail ?? json.error ?? `HTTP ${res.status}`);
 
@@ -105,7 +91,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
     if (!datiEstrat || !user) return;
     setFase("saving");
     setErrore(null);
-
     try {
       const d = datiEstrat;
       const podPdr = d.pod_pdr ?? `SCONOSCIUTO-${Date.now()}`;
@@ -113,15 +98,13 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       const { data: esistente, error: errQ } = await supabase
         .from("forniture").select("id")
         .eq("utente_id", user.id).eq("pod_pdr", podPdr).maybeSingle();
-
       if (errQ) throw new Error(`Errore ricerca fornitura: ${errQ.message}`);
 
       let fornituraId;
       if (esistente) {
         fornituraId = esistente.id;
-        if (d.intestatario) {
+        if (d.intestatario)
           await supabase.from("forniture").update({ intestatario: d.intestatario }).eq("id", fornituraId);
-        }
       } else {
         const { data: nuova, error: errF } = await supabase
           .from("forniture").insert({
@@ -133,7 +116,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
             intestatario:          d.intestatario,
             data_scadenza_offerta: d.data_scadenza_offerta,
           }).select("id").single();
-
         if (errF) throw new Error(`Errore creazione fornitura: ${errF.message}`);
         fornituraId = nuova.id;
 
@@ -158,12 +140,10 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         stato:             "pagata",
         dati_estratti:     d,
       });
-
       if (errB) throw new Error(`Errore salvataggio bolletta: ${errB.message}`);
 
       setFase("saved");
       onBollettaSaved?.();
-
     } catch (err) {
       setErrore(err.message);
       setFase("error");
@@ -218,9 +198,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
             <p style={{ color:C.text, fontSize:15, fontWeight:700, margin:"0 0 6px" }}>Analisi AI in corso...</p>
             <p style={{ color:C.textDim, fontSize:12, margin:0 }}>{fileName}</p>
           </div>
-          <p style={{ color:C.textDim, fontSize:11, textAlign:"center", lineHeight:1.6 }}>
-            Può richiedere 15–30 secondi
-          </p>
+          <p style={{ color:C.textDim, fontSize:11, textAlign:"center", lineHeight:1.6 }}>Può richiedere 15–30 secondi</p>
         </div>
       )}
 

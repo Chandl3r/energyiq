@@ -1,30 +1,17 @@
 // api/parse-bill.js
-// PDF  → riceve testo già estratto dal browser → modelli testo (stabili)
-// Immagine → riceve base64 → modelli vision
+// PDF  → riceve testo estratto dal browser → modelli testo stabili
+// Immagine → riceve base64 → openrouter/free (con retry)
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Modelli TESTO confermati nella lista free (per PDF)
-const TEXT_MODELS = [
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "google/gemma-3-27b-it:free",
-  "google/gemma-3-12b-it:free",
-];
-
-// Modelli VISION per immagini
-const VISION_MODELS = [
-  "nvidia/nemotron-nano-12b-v2-vl:free",
-  "mistralai/mistral-small-3.1-24b-instruct:free",
-];
-
-const PROMPT_BASE = `Analizza questo testo di una bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
+const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
 Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun backtick.
 
 {
   "tipo_utenza": "LUCE" oppure "GAS",
   "pod_pdr": "codice POD (IT...) o PDR (numerico)",
   "intestatario": "nome e cognome intestatario della bolletta",
-  "fornitore": "nome del fornitore es. HERA, A2A Energia, Enel",
+  "fornitore": "nome del fornitore es. A2A Energia",
   "nome_offerta": "nome offerta commerciale o null",
   "data_emissione": "YYYY-MM-DD o null",
   "periodo_inizio": "YYYY-MM-DD o null",
@@ -40,8 +27,31 @@ Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun back
 
 Regole:
 - tipo_utenza: elettricità/luce = LUCE, gas = GAS
-- pod_pdr: per luce cerca "POD" + "IT...", per gas cerca "PDR" + numero. OBBLIGATORIO.
+- pod_pdr: per luce "POD" + "IT...", per gas "PDR" + numero. OBBLIGATORIO.
 - Se un campo non è presente usa null`;
+
+// Modelli TESTO — stabili, confermati nella lista free
+const TEXT_MODELS = [
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemma-3-12b-it:free",
+  "google/gemma-3n-e2b-it:free",
+];
+
+async function callModel(model, messages, apiKey) {
+  const res = await fetch(OPENROUTER_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type":  "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+      "HTTP-Referer":  "https://energyiq-omega.vercel.app",
+      "X-Title":       "EnergyIQ",
+    },
+    body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 1024 }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
+  return data.choices?.[0]?.message?.content ?? "";
+}
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -57,109 +67,63 @@ export default async function handler(req, res) {
     const body = await new Promise((resolve, reject) => {
       let raw = "";
       req.on("data", chunk => raw += chunk);
-      req.on("end",  () => {
-        try { resolve(JSON.parse(raw)); }
-        catch { reject(new Error("Body non è JSON valido")); }
-      });
+      req.on("end",  () => { try { resolve(JSON.parse(raw)); } catch { reject(new Error("Body non JSON")); } });
       req.on("error", reject);
     });
 
-    let messages, models;
+    let messages;
+    let models;
 
     if (body.type === "text") {
-      // PDF: testo già estratto dal browser
-      const { text } = body;
-      if (!text || text.trim().length < 30) {
-        return res.status(400).json({ error: "Testo troppo corto o vuoto" });
-      }
-      messages = [{
-        role: "user",
-        content: `${PROMPT_BASE}\n\nTESTO BOLLETTA:\n${text.slice(0, 8000)}`,
-      }];
+      // PDF: testo estratto client-side
+      if (!body.text || body.text.trim().length < 30)
+        return res.status(400).json({ error: "Testo troppo corto" });
+
+      messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${body.text.slice(0, 8000)}` }];
       models = TEXT_MODELS;
 
     } else if (body.type === "image") {
       // Immagine: base64
-      const { mimeType, data: b64data } = body;
-      if (!mimeType || !b64data) {
+      if (!body.mimeType || !body.data)
         return res.status(400).json({ error: "Campi mimeType e data obbligatori" });
-      }
+
       messages = [{
         role: "user",
         content: [
-          { type: "text",      text: PROMPT_BASE },
-          { type: "image_url", image_url: { url: `data:${mimeType};base64,${b64data}` } },
+          { type: "text",      text: PROMPT },
+          { type: "image_url", image_url: { url: `data:${body.mimeType};base64,${body.data}` } },
         ],
       }];
-      models = VISION_MODELS;
+      // Per immagini: openrouter/free con retry automatico
+      models = ["openrouter/free", "openrouter/free", "openrouter/free"];
 
     } else {
       return res.status(400).json({ error: "Campo type obbligatorio: 'text' o 'image'" });
     }
 
-    // Prova modelli in ordine
     let lastError = null;
-
     for (const model of models) {
       try {
-        const orRes = await fetch(OPENROUTER_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type":  "application/json",
-            "Authorization": `Bearer ${apiKey}`,
-            "HTTP-Referer":  "https://energyiq-omega.vercel.app",
-            "X-Title":       "EnergyIQ",
-          },
-          body: JSON.stringify({
-            model,
-            messages,
-            temperature: 0.1,
-            max_tokens:  1024,
-          }),
-        });
-
-        const orData = await orRes.json();
-
-        if (!orRes.ok) {
-          lastError = orData?.error?.message ?? `HTTP ${orRes.status}`;
-          console.warn(`${model} errore:`, lastError);
-          continue;
-        }
-
-        const rawText = orData.choices?.[0]?.message?.content ?? "";
+        const rawText = await callModel(model, messages, apiKey);
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-
-        if (!jsonMatch) {
-          lastError = `Nessun JSON da ${model}: ${rawText.slice(0, 150)}`;
-          console.warn(lastError);
-          continue;
-        }
+        if (!jsonMatch) { lastError = `Nessun JSON da ${model}`; continue; }
 
         let parsed;
         try { parsed = JSON.parse(jsonMatch[0]); }
-        catch {
-          lastError = `JSON malformato da ${model}`;
-          continue;
-        }
+        catch { lastError = `JSON malformato da ${model}`; continue; }
 
-        if (!parsed.pod_pdr) {
-          return res.status(422).json({
-            error: "POD/PDR non trovato. Controlla che la bolletta contenga il codice POD (luce) o PDR (gas).",
-          });
-        }
+        if (!parsed.pod_pdr)
+          return res.status(422).json({ error: "POD/PDR non trovato nella bolletta." });
 
         return res.status(200).json({ ok: true, data: parsed, model_used: model });
 
-      } catch (fetchErr) {
-        lastError = fetchErr.message;
+      } catch (err) {
+        lastError = err.message;
         continue;
       }
     }
 
-    return res.status(502).json({
-      error:  "Nessun modello disponibile. Riprova tra qualche minuto.",
-      detail: lastError,
-    });
+    return res.status(502).json({ error: "Nessun modello disponibile. Riprova.", detail: lastError });
 
   } catch (err) {
     console.error("parse-bill crash:", err.message);
