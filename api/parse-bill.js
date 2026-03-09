@@ -83,7 +83,7 @@ export default async function handler(req, res) {
         "X-Title":       "EnergyIQ",
       },
       body: JSON.stringify({
-        model:       "openrouter/free",
+        model: "mistralai/mistral-small-3.1-24b-instruct:free",
         messages:    [{ role: "user", content: contentParts }],
         temperature: 0.1,
         max_tokens:  1024,
