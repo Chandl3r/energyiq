@@ -66,22 +66,22 @@ export default function UploadScreen({ user, onBollettaSaved }) {
 
     try {
       const d = datiEstrat;
-
-      // Fallback: se pod_pdr è null usa un placeholder temporaneo
       const podPdr = d.pod_pdr ?? `SCONOSCIUTO-${Date.now()}`;
 
-      // Cerca fornitura esistente con questo POD/PDR
+      // Cerca fornitura esistente
       const { data: esistente, error: errQ } = await supabase
         .from("forniture").select("id")
-        .eq("utente_id", user.id)
-        .eq("pod_pdr", podPdr)
-        .maybeSingle();
+        .eq("utente_id", user.id).eq("pod_pdr", podPdr).maybeSingle();
 
       if (errQ) throw new Error(`Errore ricerca fornitura: ${errQ.message}`);
 
       let fornituraId;
       if (esistente) {
         fornituraId = esistente.id;
+        // Aggiorna intestatario se presente
+        if (d.intestatario) {
+          await supabase.from("forniture").update({ intestatario: d.intestatario }).eq("id", fornituraId);
+        }
       } else {
         const { data: nuova, error: errF } = await supabase
           .from("forniture").insert({
@@ -90,6 +90,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
             pod_pdr:               podPdr,
             fornitore:             d.fornitore ?? "Sconosciuto",
             nome_offerta:          d.nome_offerta,
+            intestatario:          d.intestatario,
             data_scadenza_offerta: d.data_scadenza_offerta,
           }).select("id").single();
 
@@ -97,14 +98,13 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         fornituraId = nuova.id;
 
         if (d.prezzo_materia_prima) {
-          const { error: errT } = await supabase.from("tariffe").insert({
+          await supabase.from("tariffe").insert({
             fornitura_id:         fornituraId,
             tipo_prezzo:          d.tipo_prezzo ?? "FISSO",
             prezzo_materia_prima: d.prezzo_materia_prima,
             data_inizio:          d.periodo_inizio ?? new Date().toISOString().slice(0,10),
             data_fine:            d.data_scadenza_offerta,
           });
-          if (errT) console.warn("Tariffa non salvata:", errT.message);
         }
       }
 
@@ -154,7 +154,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               <div style={{ background:C.skyDim, borderRadius:12, padding:12 }}><Camera size={24} color={C.sky} /></div>
               <div style={{ textAlign:"center" }}>
                 <p style={{ color:C.text, fontSize:13, fontWeight:700, margin:"0 0 3px" }}>Fotografa</p>
-                <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.4 }}>Scatta o carica<br/>Foto/Screenshot</p>
+                <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.4 }}>Scatta o carica<br/>foto/screenshot</p>
               </div>
             </button>
           </div>
@@ -169,14 +169,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               </div>
             ))}
           </div>
-          <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:16 }}>
-            <p style={{ color:C.textDim, fontSize:11, fontWeight:700, letterSpacing:1.5, margin:"0 0 12px", textTransform:"uppercase" }}>Fornitori supportati</p>
-            <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
-              {["A2A","Enel","Eni","Edison","Hera","Engie","E.ON","Sorgenia","Iren","Acea","Pulsee"].map(p => (
-                <span key={p} style={{ background:C.surface2, border:`1px solid ${C.border2}`, borderRadius:20, padding:"5px 12px", color:C.textMid, fontSize:11 }}>{p}</span>
-              ))}
-            </div>
-          </div>
         </>
       )}
 
@@ -188,7 +180,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
             <p style={{ color:C.textDim, fontSize:12, margin:0 }}>{fileName}</p>
           </div>
           <p style={{ color:C.textDim, fontSize:11, textAlign:"center", lineHeight:1.6 }}>
-            Lettura bolletta in corso,<br/>può richiedere 10–20 secondi
+            Lettura bolletta in corso,<br/>può richiedere 15–30 secondi
           </p>
         </div>
       )}
@@ -211,9 +203,10 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               </span>
             </div>
             {[
+              ["Intestatario",     datiEstrat.intestatario],
               ["Fornitore",        datiEstrat.fornitore],
               ["Offerta",          datiEstrat.nome_offerta],
-              [datiEstrat.tipo_utenza==="LUCE"?"POD":"PDR", datiEstrat.pod_pdr],
+              [datiEstrat.tipo_utenza === "LUCE" ? "POD" : "PDR", datiEstrat.pod_pdr],
               ["Periodo",          datiEstrat.periodo_inizio && datiEstrat.periodo_fine
                                    ? `${fmt(datiEstrat.periodo_inizio)} → ${fmt(datiEstrat.periodo_fine)}` : null],
               ["Consumo",          datiEstrat.consumo_fatturato != null
@@ -229,11 +222,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                   fontFamily: k==="POD"||k==="PDR" ? "monospace":"inherit" }}>{v}</span>
               </div>
             ))}
-            {datiEstrat.note && (
-              <p style={{ color:C.textDim, fontSize:11, marginTop:8, padding:"10px 12px", background:C.surface, borderRadius:10, lineHeight:1.5 }}>
-                📝 {datiEstrat.note}
-              </p>
-            )}
           </div>
           <button onClick={salva} style={{ width:"100%", padding:"16px", borderRadius:18, background:C.green, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
             <Save size={18} color="#fff" />
@@ -260,7 +248,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
             <div style={{ textAlign:"center" }}>
               <p style={{ color:C.green, fontSize:16, fontWeight:700, margin:"0 0 6px" }}>Bolletta salvata!</p>
               <p style={{ color:C.textDim, fontSize:12, margin:0, lineHeight:1.6 }}>
-                I dati sono stati salvati nel tuo profilo.<br/>Torna alla Home per vedere i grafici aggiornati.
+                Torna alla Home per vedere i grafici aggiornati.
               </p>
             </div>
           </div>
