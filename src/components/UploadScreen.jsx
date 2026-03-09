@@ -1,6 +1,4 @@
 // src/components/UploadScreen.jsx
-// Sostituisce la funzione UploadScreen() nel tuo AppShell.jsx
-
 import { useState, useRef } from "react";
 import { Camera, FileText, CheckCircle, AlertCircle, Loader2, Save, RotateCcw } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -15,11 +13,15 @@ const C = {
   text:"#ffffff", textMid:"#9ca3af", textDim:"#4b5563",
 };
 
-// Determina l'URL dell'API: in produzione usa /api/parse-bill, in dev pure
-const API_URL = "/api/parse-bill";
-
-// ── Stato della fase di upload ────────────────────────────────
-// idle → uploading → parsing → review → saving → saved | error
+// Converte File → base64 string
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(reader.result.split(",")[1]); // strip "data:...;base64,"
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function UploadScreen({ user, onBollettaSaved }) {
   const [fase,       setFase]       = useState("idle");
@@ -30,121 +32,103 @@ export default function UploadScreen({ user, onBollettaSaved }) {
   const imgRef  = useRef();
 
   const reset = () => {
-    setFase("idle");
-    setErrore(null);
-    setDatiEstrat(null);
-    setFileName(null);
+    setFase("idle"); setErrore(null); setDatiEstrat(null); setFileName(null);
   };
 
-  // ── 1. Invia il file all'API serverless ───────────────────
+  // 1. Converti in base64 e invia a /api/parse-bill come JSON
   const parseFile = async (file) => {
     setFileName(file.name);
     setFase("uploading");
     setErrore(null);
-
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-
       setFase("parsing");
-      const res = await fetch(API_URL, { method: "POST", body: formData });
+      const b64  = await fileToBase64(file);
+      const mime = file.type || "application/pdf";
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Errore sconosciuto" }));
-        throw new Error(err.error ?? `HTTP ${res.status}`);
-      }
+      const res = await fetch("/api/parse-bill", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ mimeType: mime, data: b64 }),
+      });
 
-      const { data } = await res.json();
-      setDatiEstrat(data);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail ?? json.error ?? `HTTP ${res.status}`);
+
+      setDatiEstrat(json.data);
       setFase("review");
-
     } catch (err) {
       setErrore(err.message);
       setFase("error");
     }
   };
 
-  // ── 2. Salva su Supabase ──────────────────────────────────
+  // 2. Salva su Supabase (crea fornitura se non esiste)
   const salva = async () => {
     if (!datiEstrat || !user) return;
     setFase("saving");
-
     try {
       const d = datiEstrat;
 
-      // 2a. Cerca o crea la fornitura con questo POD/PDR
+      // Cerca o crea fornitura con questo POD/PDR
       let fornituraId;
       const { data: esistente } = await supabase
-        .from("forniture")
-        .select("id")
-        .eq("utente_id", user.id)
-        .eq("pod_pdr", d.pod_pdr)
-        .maybeSingle();
+        .from("forniture").select("id")
+        .eq("utente_id", user.id).eq("pod_pdr", d.pod_pdr).maybeSingle();
 
       if (esistente) {
         fornituraId = esistente.id;
       } else {
-        // Prima bolletta di questa fornitura → la creiamo automaticamente
         const { data: nuova, error: errF } = await supabase
-          .from("forniture")
-          .insert({
+          .from("forniture").insert({
             utente_id:             user.id,
             tipo_utenza:           d.tipo_utenza,
             pod_pdr:               d.pod_pdr,
             fornitore:             d.fornitore,
             nome_offerta:          d.nome_offerta,
             data_scadenza_offerta: d.data_scadenza_offerta,
-          })
-          .select("id")
-          .single();
+          }).select("id").single();
         if (errF) throw new Error(errF.message);
         fornituraId = nuova.id;
 
-        // Crea anche la tariffa se abbiamo il prezzo
         if (d.prezzo_materia_prima) {
           await supabase.from("tariffe").insert({
-            fornitura_id:        fornituraId,
-            tipo_prezzo:         d.tipo_prezzo ?? "FISSO",
+            fornitura_id:         fornituraId,
+            tipo_prezzo:          d.tipo_prezzo ?? "FISSO",
             prezzo_materia_prima: d.prezzo_materia_prima,
-            data_inizio:         d.periodo_inizio ?? new Date().toISOString().slice(0,10),
-            data_fine:           d.data_scadenza_offerta,
+            data_inizio:          d.periodo_inizio ?? new Date().toISOString().slice(0,10),
+            data_fine:            d.data_scadenza_offerta,
           });
         }
       }
 
-      // 2b. Salva la bolletta
       const { error: errB } = await supabase.from("bollette").insert({
-        fornitura_id:     fornituraId,
-        data_emissione:   d.data_emissione,
-        periodo_inizio:   d.periodo_inizio,
-        periodo_fine:     d.periodo_fine,
+        fornitura_id:      fornituraId,
+        data_emissione:    d.data_emissione,
+        periodo_inizio:    d.periodo_inizio,
+        periodo_fine:      d.periodo_fine,
         consumo_fatturato: d.consumo_fatturato,
-        totale_pagare:    d.totale_pagare,
-        stato:            "pagata",
-        dati_estratti:    d,
+        totale_pagare:     d.totale_pagare,
+        stato:             "pagata",
+        dati_estratti:     d,
       });
       if (errB) throw new Error(errB.message);
 
       setFase("saved");
-      onBollettaSaved?.(); // notifica AppShell di ricaricare i dati
-
+      onBollettaSaved?.();
     } catch (err) {
       setErrore(err.message);
       setFase("error");
     }
   };
 
-  // ── Render ────────────────────────────────────────────────
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16, paddingBottom:8 }}>
-
-      {/* Header */}
       <div>
         <p style={{ color:C.textDim, fontSize:12, margin:"0 0 4px", letterSpacing:2, textTransform:"uppercase" }}>Importa</p>
         <h2 style={{ color:C.text, fontSize:24, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>Carica bolletta</h2>
       </div>
 
-      {/* IDLE: bottoni upload */}
+      {/* IDLE */}
       {fase === "idle" && (
         <>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
@@ -165,14 +149,9 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               </div>
             </button>
           </div>
-
           <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:16 }}>
             <p style={{ color:C.textMid, fontSize:12, fontWeight:600, margin:"0 0 10px" }}>💡 Come funziona</p>
-            {[
-              "Carica il PDF oppure fotografa la bolletta",
-              "L'AI estrae automaticamente prezzi, consumi e POD/PDR",
-              "Controlla i dati e salvali con un tap",
-            ].map((t, i) => (
+            {["Carica il PDF oppure fotografa la bolletta","L'AI estrae automaticamente prezzi, consumi e POD/PDR","Controlla i dati e salvali con un tap"].map((t,i) => (
               <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, marginBottom:i<2?10:0 }}>
                 <div style={{ background:C.amberDim, borderRadius:"50%", width:20, height:20, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
                   <span style={{ color:C.amber, fontSize:10, fontWeight:700 }}>{i+1}</span>
@@ -181,7 +160,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               </div>
             ))}
           </div>
-
           <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:16 }}>
             <p style={{ color:C.textDim, fontSize:11, fontWeight:700, letterSpacing:1.5, margin:"0 0 12px", textTransform:"uppercase" }}>Fornitori supportati</p>
             <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
@@ -193,7 +171,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         </>
       )}
 
-      {/* UPLOADING / PARSING: spinner */}
+      {/* PARSING / UPLOADING */}
       {(fase === "uploading" || fase === "parsing") && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:32, display:"flex", flexDirection:"column", alignItems:"center", gap:16 }}>
           <Loader2 size={36} color={C.amber} style={{ animation:"spin 1s linear infinite" }} />
@@ -203,13 +181,15 @@ export default function UploadScreen({ user, onBollettaSaved }) {
             </p>
             <p style={{ color:C.textDim, fontSize:12, margin:0 }}>{fileName}</p>
           </div>
-          <p style={{ color:C.textDim, fontSize:11, textAlign:"center", lineHeight:1.6 }}>
-            {fase === "parsing" ? "Gemini sta leggendo la bolletta e\nestrae automaticamente tutti i dati" : ""}
-          </p>
+          {fase === "parsing" && (
+            <p style={{ color:C.textDim, fontSize:11, textAlign:"center", lineHeight:1.6 }}>
+              Gemini sta leggendo la bolletta e<br/>estrae automaticamente tutti i dati
+            </p>
+          )}
         </div>
       )}
 
-      {/* REVIEW: mostra i dati estratti */}
+      {/* REVIEW */}
       {fase === "review" && datiEstrat && (
         <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
           <div style={{ background:"#0d1a0d", border:`1px solid ${C.green}33`, borderRadius:20, padding:18 }}>
@@ -217,8 +197,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               <CheckCircle size={18} color={C.green} />
               <p style={{ color:C.green, fontSize:13, fontWeight:700, margin:0 }}>Dati estratti correttamente</p>
             </div>
-
-            {/* Badge tipo utenza */}
             <div style={{ marginBottom:14 }}>
               <span style={{
                 background: datiEstrat.tipo_utenza === "LUCE" ? C.amberDim : C.skyDim,
@@ -229,56 +207,38 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                 {datiEstrat.tipo_utenza === "LUCE" ? "⚡ Luce" : "🔥 Gas"}
               </span>
             </div>
-
-            {/* Campi estratti */}
             {[
               ["Fornitore",        datiEstrat.fornitore],
               ["Offerta",          datiEstrat.nome_offerta],
               [datiEstrat.tipo_utenza==="LUCE"?"POD":"PDR", datiEstrat.pod_pdr],
               ["Periodo",          datiEstrat.periodo_inizio && datiEstrat.periodo_fine
-                                   ? `${fmt(datiEstrat.periodo_inizio)} → ${fmt(datiEstrat.periodo_fine)}`
-                                   : null],
+                                   ? `${fmt(datiEstrat.periodo_inizio)} → ${fmt(datiEstrat.periodo_fine)}` : null],
               ["Consumo",          datiEstrat.consumo_fatturato != null
-                                   ? `${datiEstrat.consumo_fatturato} ${datiEstrat.unita_misura ?? ""}`
-                                   : null],
+                                   ? `${datiEstrat.consumo_fatturato} ${datiEstrat.unita_misura ?? ""}` : null],
               ["Tariffa energia",  datiEstrat.prezzo_materia_prima != null
-                                   ? `${datiEstrat.prezzo_materia_prima} €/${datiEstrat.unita_misura ?? "kWh"} (${datiEstrat.tipo_prezzo ?? ""})`
-                                   : null],
-              ["Totale da pagare", datiEstrat.totale_pagare != null
-                                   ? `${datiEstrat.totale_pagare} €`
-                                   : null],
+                                   ? `${datiEstrat.prezzo_materia_prima} €/${datiEstrat.unita_misura ?? "kWh"} (${datiEstrat.tipo_prezzo ?? ""})` : null],
+              ["Totale da pagare", datiEstrat.totale_pagare != null ? `${datiEstrat.totale_pagare} €` : null],
               ["Scadenza offerta", datiEstrat.data_scadenza_offerta ? fmt(datiEstrat.data_scadenza_offerta) : null],
-            ].filter(([,v]) => v != null).map(([k, v]) => (
+            ].filter(([,v]) => v != null).map(([k,v]) => (
               <div key={k} style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, gap:12 }}>
                 <span style={{ color:C.textDim, fontSize:12, flexShrink:0 }}>{k}</span>
-                <span style={{ color:C.text, fontSize:12, fontWeight:600, fontFamily: k.includes("POD")||k.includes("PDR") ? "monospace":"inherit", textAlign:"right" }}>{v}</span>
+                <span style={{ color:C.text, fontSize:12, fontWeight:600, textAlign:"right",
+                  fontFamily: k==="POD"||k==="PDR" ? "monospace":"inherit" }}>{v}</span>
               </div>
             ))}
-
             {datiEstrat.note && (
               <p style={{ color:C.textDim, fontSize:11, marginTop:8, padding:"10px 12px", background:C.surface, borderRadius:10, lineHeight:1.5 }}>
                 📝 {datiEstrat.note}
               </p>
             )}
           </div>
-
-          {/* Bottoni azione */}
-          <button onClick={salva} style={{
-            width:"100%", padding:"16px", borderRadius:18,
-            background:C.green, border:"none", cursor:"pointer",
-            display:"flex", alignItems:"center", justifyContent:"center", gap:10,
-          }}>
+          <button onClick={salva} style={{ width:"100%", padding:"16px", borderRadius:18, background:C.green, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
             <Save size={18} color="#fff" />
-            <span style={{ color:"#fff", fontSize:15, fontWeight:700, fontFamily:"'DM Sans',sans-serif" }}>Salva bolletta</span>
+            <span style={{ color:"#fff", fontSize:15, fontWeight:700 }}>Salva bolletta</span>
           </button>
-
-          <button onClick={reset} style={{
-            width:"100%", padding:"14px", borderRadius:18,
-            background:C.surface, border:`1px solid ${C.border}`, cursor:"pointer",
-            display:"flex", alignItems:"center", justifyContent:"center", gap:10,
-          }}>
+          <button onClick={reset} style={{ width:"100%", padding:"14px", borderRadius:18, background:C.surface, border:`1px solid ${C.border}`, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
             <RotateCcw size={16} color={C.textDim} />
-            <span style={{ color:C.textDim, fontSize:14, fontFamily:"'DM Sans',sans-serif" }}>Carica un'altra bolletta</span>
+            <span style={{ color:C.textDim, fontSize:14 }}>Carica un'altra bolletta</span>
           </button>
         </div>
       )}
@@ -303,11 +263,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               </p>
             </div>
           </div>
-          <button onClick={reset} style={{
-            width:"100%", padding:"14px", borderRadius:18,
-            background:C.surface, border:`1px solid ${C.border}`, cursor:"pointer",
-            display:"flex", alignItems:"center", justifyContent:"center", gap:10,
-          }}>
+          <button onClick={reset} style={{ width:"100%", padding:"14px", borderRadius:18, background:C.surface, border:`1px solid ${C.border}`, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
             <RotateCcw size={16} color={C.textDim} />
             <span style={{ color:C.textDim, fontSize:14 }}>Carica un'altra bolletta</span>
           </button>
@@ -324,32 +280,25 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               <p style={{ color:C.textDim, fontSize:12, margin:0, lineHeight:1.6 }}>{errore}</p>
             </div>
           </div>
-          <button onClick={reset} style={{
-            width:"100%", padding:"14px", borderRadius:18,
-            background:C.surface, border:`1px solid ${C.border}`, cursor:"pointer",
-            display:"flex", alignItems:"center", justifyContent:"center", gap:10,
-          }}>
+          <button onClick={reset} style={{ width:"100%", padding:"14px", borderRadius:18, background:C.surface, border:`1px solid ${C.border}`, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
             <RotateCcw size={16} color={C.textDim} />
             <span style={{ color:C.textDim, fontSize:14 }}>Riprova</span>
           </button>
         </div>
       )}
 
-      {/* Input file nascosti */}
       <input ref={fileRef} type="file" accept=".pdf" style={{ display:"none" }}
         onChange={e => e.target.files[0] && parseFile(e.target.files[0])} />
       <input ref={imgRef} type="file" accept="image/*" capture="environment" style={{ display:"none" }}
         onChange={e => e.target.files[0] && parseFile(e.target.files[0])} />
 
-      <style>{`@keyframes spin { from { transform:rotate(0deg) } to { transform:rotate(360deg) } }`}</style>
+      <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
     </div>
   );
 }
 
-// ── Utility: formatta data ISO → "Ott 2025" ──────────────────
 function fmt(iso) {
   if (!iso) return "";
-  try {
-    return new Date(iso).toLocaleDateString("it-IT", { month:"short", year:"numeric" });
-  } catch { return iso; }
+  try { return new Date(iso).toLocaleDateString("it-IT", { month:"short", year:"numeric" }); }
+  catch { return iso; }
 }
