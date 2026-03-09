@@ -1,8 +1,7 @@
 // api/parse-bill.js
-// Riceve JSON { mimeType, data (base64) } — niente multipart, niente parser custom.
+// Usa OpenRouter con google/gemini-2.0-flash-exp:free — gratuito senza limiti di billing
 
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
 Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun backtick.
@@ -34,11 +33,10 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST")    return res.status(405).json({ error: "Method not allowed" });
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY non configurata" });
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: "OPENROUTER_API_KEY non configurata" });
 
   try {
-    // Legge il body JSON
     const body = await new Promise((resolve, reject) => {
       let raw = "";
       req.on("data", chunk => raw += chunk);
@@ -59,36 +57,46 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: `Tipo file non supportato: ${mimeType}` });
     }
 
-    // Chiama Gemini Vision
-    const geminiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
+    // OpenRouter usa formato OpenAI — immagini come URL base64
+    const imageUrl = `data:${mimeType};base64,${b64data}`;
+
+    const orRes = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type":  "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer":  "https://energyiq-omega.vercel.app",
+        "X-Title":       "EnergyIQ",
+      },
       body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: PROMPT },
-            { inline_data: { mime_type: mimeType, data: b64data } },
+        model: "google/gemini-2.0-flash-exp:free",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text",      text: PROMPT },
+            { type: "image_url", image_url: { url: imageUrl } },
           ],
         }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 1024 },
+        temperature: 0.1,
+        max_tokens:  1024,
       }),
     });
 
-    const geminiData = await geminiRes.json();
+    const orData = await orRes.json();
 
-    if (!geminiRes.ok) {
+    if (!orRes.ok) {
       return res.status(502).json({
-        error:  "Gemini API error",
-        detail: geminiData?.error?.message ?? JSON.stringify(geminiData),
+        error:  "OpenRouter API error",
+        detail: orData?.error?.message ?? JSON.stringify(orData),
       });
     }
 
-    const rawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    const rawText = orData.choices?.[0]?.message?.content ?? "";
     const clean   = rawText.replace(/```json|```/g, "").trim();
 
     let parsed;
     try   { parsed = JSON.parse(clean); }
-    catch { return res.status(422).json({ error: "JSON non valido da Gemini", rawText: rawText.slice(0,500) }); }
+    catch { return res.status(422).json({ error: "JSON non valido dal modello", rawText: rawText.slice(0, 500) }); }
 
     return res.status(200).json({ ok: true, data: parsed });
 
