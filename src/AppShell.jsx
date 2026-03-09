@@ -464,7 +464,7 @@ export default function AppShell({ user, dati, onSignOut, onRefresh }) {
         </div>
         <div style={{ flex:1, overflowY:"auto", padding:"8px 16px 100px" }}>
           {tab==="home"     && <Dashboard     />}
-          {tab==="upload"   && <UploadScreen  />}
+          {tab==="upload" && <UploadScreen user={user} onBollettaSaved={() => { onRefresh(); setTab("home"); }} />}
           {tab==="mercato"  && <MercatoScreen />}
           {tab==="settings" && <SettingsScreen/>}
         </div>
