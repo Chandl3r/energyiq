@@ -3,7 +3,7 @@
 // - PDF  → estrae testo con pdf-parse (server-side) → manda testo al LLM (niente vision)
 // - Immagine → manda base64 al modello vision
 
-import pdfParse from "pdf-parse/lib/pdf-parse.js";
+import pdfParse from "pdf-parse";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
