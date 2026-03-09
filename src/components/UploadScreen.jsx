@@ -92,7 +92,25 @@ export default function UploadScreen({ user, onBollettaSaved }) {
     setFase("saving");
     setErrore(null);
     try {
-      const d = datiEstrat;
+      // Normalizza date italiane → YYYY-MM-DD
+      const mesi = { gennaio:1, febbraio:2, marzo:3, aprile:4, maggio:5, giugno:6,
+                     luglio:7, agosto:8, settembre:9, ottobre:10, novembre:11, dicembre:12 };
+      const normalizzaData = (s) => {
+        if (!s || /^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+        const m = s.match(/(\d{1,2})\s+(\w+)\s+(\d{4})/i);
+        if (m) {
+          const mese = mesi[m[2].toLowerCase()];
+          if (mese) return `${m[3]}-${String(mese).padStart(2,"0")}-${String(m[1]).padStart(2,"0")}`;
+        }
+        return null;
+      };
+      const d = {
+        ...datiEstrat,
+        data_emissione:        normalizzaData(datiEstrat.data_emissione),
+        periodo_inizio:        normalizzaData(datiEstrat.periodo_inizio),
+        periodo_fine:          normalizzaData(datiEstrat.periodo_fine),
+        data_scadenza_offerta: normalizzaData(datiEstrat.data_scadenza_offerta),
+      };
       const podPdr = d.pod_pdr ?? `SCONOSCIUTO-${Date.now()}`;
 
       const { data: esistente, error: errQ } = await supabase
