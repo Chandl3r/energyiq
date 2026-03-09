@@ -1,21 +1,32 @@
 // api/parse-bill.js
+// Strategia definitiva:
+// - PDF  → estrae testo con pdf-parse (server-side) → manda testo al LLM (niente vision)
+// - Immagine → manda base64 al modello vision
+
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Modelli vision gratuiti in ordine di preferenza
-const MODELS = [
-  "qwen/qwen2.5-vl-72b-instruct:free",
+// Modelli testo (per PDF con testo estratto) — molto più affidabili dei vision free
+const TEXT_MODELS = [
+  "deepseek/deepseek-chat-v3-0324:free",
+  "meta-llama/llama-4-maverick:free",
   "google/gemma-3-27b-it:free",
-  "openrouter/free",
 ];
 
-const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
+// Modelli vision (per immagini)
+const VISION_MODELS = [
+  "qwen/qwen2.5-vl-72b-instruct:free",
+  "google/gemma-3-27b-it:free",
+];
+
+const buildPrompt = (testoOImmagine) => `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
 Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun backtick.
 
 {
   "tipo_utenza": "LUCE" oppure "GAS",
-  "pod_pdr": "codice POD (IT...) o PDR (numerico) - cerca bene",
-  "intestatario": "nome e cognome dell'intestatario della bolletta",
+  "pod_pdr": "codice POD (IT...) o PDR (numerico)",
+  "intestatario": "nome e cognome intestatario della bolletta",
   "fornitore": "nome del fornitore es. HERA, A2A Energia, Enel",
   "nome_offerta": "nome offerta commerciale o null",
   "data_emissione": "YYYY-MM-DD o null",
@@ -30,11 +41,12 @@ Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun back
   "note": "info rilevanti o null"
 }
 
-IMPORTANTE:
-- tipo_utenza: energia elettrica/luce = LUCE, gas naturale = GAS
-- pod_pdr: per luce cerca "POD" + codice "IT...", per gas cerca "PDR" o "matricola" + numero
-- intestatario: nome completo dell'intestatario scritto sulla bolletta
-- Se un campo non è presente metti null`;
+Regole:
+- tipo_utenza: elettricità/luce = LUCE, gas = GAS
+- pod_pdr: per luce "POD" + "IT...", per gas "PDR" + numero. Campo OBBLIGATORIO.
+- Se un campo non è presente usa null
+
+${testoOImmagine}`;
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -47,6 +59,7 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: "OPENROUTER_API_KEY non configurata" });
 
   try {
+    // Legge body
     const body = await new Promise((resolve, reject) => {
       let raw = "";
       req.on("data", chunk => raw += chunk);
@@ -62,26 +75,45 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Campi mimeType e data obbligatori" });
     }
 
-    // Costruisce content parts in base al tipo file
-    const buildContent = (model) => {
-      if (mimeType === "application/pdf") {
-        // Per PDF: usa il tipo "file" di OpenRouter (text extraction gratuita)
-        return [
-          { type: "text", text: PROMPT },
-          { type: "file", file: { filename: "bolletta.pdf", file_data: `data:application/pdf;base64,${b64data}` } },
-        ];
-      } else {
-        // Per immagini: base64 image_url
-        return [
-          { type: "text", text: PROMPT },
-          { type: "image_url", image_url: { url: `data:${mimeType};base64,${b64data}` } },
-        ];
-      }
-    };
+    let messages;
+    let models;
 
-    // Prova i modelli in ordine finché uno funziona
+    if (mimeType === "application/pdf") {
+      // ── PDF: estrai testo server-side ─────────────────────────────
+      const pdfBuffer = Buffer.from(b64data, "base64");
+      let testoPdf = "";
+      try {
+        const parsed = await pdfParse(pdfBuffer);
+        testoPdf = parsed.text?.slice(0, 8000) ?? ""; // max 8000 char
+      } catch (e) {
+        return res.status(422).json({ error: "Impossibile estrarre testo dal PDF. Prova a fotografare la bolletta." });
+      }
+
+      if (testoPdf.trim().length < 50) {
+        return res.status(422).json({ error: "PDF senza testo selezionabile (è una scansione). Fotografa la bolletta invece di caricare il PDF." });
+      }
+
+      const prompt = buildPrompt(`TESTO DELLA BOLLETTA:\n${testoPdf}`);
+      messages = [{ role: "user", content: prompt }];
+      models   = TEXT_MODELS;
+
+    } else {
+      // ── Immagine: usa vision ───────────────────────────────────────
+      const prompt = buildPrompt("Analizza l'immagine della bolletta qui sopra:");
+      messages = [{
+        role: "user",
+        content: [
+          { type: "text",      text: prompt },
+          { type: "image_url", image_url: { url: `data:${mimeType};base64,${b64data}` } },
+        ],
+      }];
+      models = VISION_MODELS;
+    }
+
+    // ── Prova i modelli in ordine ─────────────────────────────────────
     let lastError = null;
-    for (const model of MODELS) {
+
+    for (const model of models) {
       try {
         const orRes = await fetch(OPENROUTER_URL, {
           method: "POST",
@@ -93,7 +125,7 @@ export default async function handler(req, res) {
           },
           body: JSON.stringify({
             model,
-            messages: [{ role: "user", content: buildContent(model) }],
+            messages,
             temperature: 0.1,
             max_tokens:  1024,
           }),
@@ -101,20 +133,18 @@ export default async function handler(req, res) {
 
         const orData = await orRes.json();
 
-        // Errore provider → prova prossimo modello
         if (!orRes.ok) {
-          lastError = orData?.error?.message ?? `HTTP ${orRes.status}`;
-          console.warn(`Modello ${model} fallito: ${lastError}`);
+          lastError = orData?.error?.message ?? `HTTP ${orRes.status} da ${model}`;
+          console.warn(`${model} errore:`, lastError);
           continue;
         }
 
         const rawText = orData.choices?.[0]?.message?.content ?? "";
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
 
-        // Nessun JSON → prova prossimo modello
         if (!jsonMatch) {
-          lastError = `Nessun JSON da ${model}: ${rawText.slice(0, 100)}`;
-          console.warn(lastError);
+          lastError = `Nessun JSON da ${model}`;
+          console.warn(lastError, rawText.slice(0, 200));
           continue;
         }
 
@@ -128,23 +158,21 @@ export default async function handler(req, res) {
 
         if (!parsed.pod_pdr) {
           return res.status(422).json({
-            error: "POD/PDR non trovato. Prova con un'immagine più nitida o un PDF con testo selezionabile.",
+            error: "POD/PDR non trovato nella bolletta. Controlla che il PDF contenga il codice POD o PDR.",
           });
         }
 
-        // Successo — aggiunge il modello usato per debug
         return res.status(200).json({ ok: true, data: parsed, model_used: model });
 
       } catch (fetchErr) {
         lastError = fetchErr.message;
-        console.warn(`Errore fetch ${model}: ${fetchErr.message}`);
+        console.warn(`Errore fetch ${model}:`, fetchErr.message);
         continue;
       }
     }
 
-    // Tutti i modelli falliti
     return res.status(502).json({
-      error: "Nessun modello disponibile. Riprova tra qualche minuto.",
+      error:  "Nessun modello disponibile al momento. Riprova tra qualche minuto.",
       detail: lastError,
     });
 
