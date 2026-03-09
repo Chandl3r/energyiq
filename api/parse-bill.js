@@ -2,7 +2,7 @@
 // Riceve JSON { mimeType, data (base64) } — niente multipart, niente parser custom.
 
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
 const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
 Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun backtick.
