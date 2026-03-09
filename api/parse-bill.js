@@ -1,26 +1,10 @@
 // api/parse-bill.js
-// Strategia definitiva:
-// - PDF  → estrae testo con pdf-parse (server-side) → manda testo al LLM (niente vision)
-// - Immagine → manda base64 al modello vision
-
-import pdfParse from "pdf-parse";
+// PDF → OpenRouter file type nativo (niente pdf-parse, niente dipendenze)
+// Immagine → base64 image_url
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Modelli testo (per PDF con testo estratto) — molto più affidabili dei vision free
-const TEXT_MODELS = [
-  "deepseek/deepseek-chat-v3-0324:free",
-  "meta-llama/llama-4-maverick:free",
-  "google/gemma-3-27b-it:free",
-];
-
-// Modelli vision (per immagini)
-const VISION_MODELS = [
-  "qwen/qwen2.5-vl-72b-instruct:free",
-  "google/gemma-3-27b-it:free",
-];
-
-const buildPrompt = (testoOImmagine) => `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
+const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
 Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun backtick.
 
 {
@@ -43,10 +27,16 @@ Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun back
 
 Regole:
 - tipo_utenza: elettricità/luce = LUCE, gas = GAS
-- pod_pdr: per luce "POD" + "IT...", per gas "PDR" + numero. Campo OBBLIGATORIO.
-- Se un campo non è presente usa null
+- pod_pdr: per luce "POD" + "IT...", per gas "PDR" + numero. OBBLIGATORIO.
+- intestatario: nome completo scritto sulla bolletta
+- Se un campo non è presente usa null`;
 
-${testoOImmagine}`;
+// Modelli in ordine di preferenza — tutti free
+const MODELS = [
+  "qwen/qwen2.5-vl-72b-instruct:free",
+  "google/gemma-3-27b-it:free",
+  "deepseek/deepseek-r1-0528:free",
+];
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -59,7 +49,6 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: "OPENROUTER_API_KEY non configurata" });
 
   try {
-    // Legge body
     const body = await new Promise((resolve, reject) => {
       let raw = "";
       req.on("data", chunk => raw += chunk);
@@ -75,45 +64,31 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Campi mimeType e data obbligatori" });
     }
 
-    let messages;
-    let models;
-
-    if (mimeType === "application/pdf") {
-      // ── PDF: estrai testo server-side ─────────────────────────────
-      const pdfBuffer = Buffer.from(b64data, "base64");
-      let testoPdf = "";
-      try {
-        const parsed = await pdfParse(pdfBuffer);
-        testoPdf = parsed.text?.slice(0, 8000) ?? ""; // max 8000 char
-      } catch (e) {
-        return res.status(422).json({ error: "Impossibile estrarre testo dal PDF. Prova a fotografare la bolletta." });
-      }
-
-      if (testoPdf.trim().length < 50) {
-        return res.status(422).json({ error: "PDF senza testo selezionabile (è una scansione). Fotografa la bolletta invece di caricare il PDF." });
-      }
-
-      const prompt = buildPrompt(`TESTO DELLA BOLLETTA:\n${testoPdf}`);
-      messages = [{ role: "user", content: prompt }];
-      models   = TEXT_MODELS;
-
-    } else {
-      // ── Immagine: usa vision ───────────────────────────────────────
-      const prompt = buildPrompt("Analizza l'immagine della bolletta qui sopra:");
-      messages = [{
-        role: "user",
-        content: [
-          { type: "text",      text: prompt },
+    // Costruisce il content in base al tipo file
+    const buildContent = () => {
+      if (mimeType === "application/pdf") {
+        return [
+          { type: "text", text: PROMPT },
+          {
+            type: "file",
+            file: {
+              filename:  "bolletta.pdf",
+              file_data: `data:application/pdf;base64,${b64data}`,
+            },
+          },
+        ];
+      } else {
+        return [
+          { type: "text", text: PROMPT },
           { type: "image_url", image_url: { url: `data:${mimeType};base64,${b64data}` } },
-        ],
-      }];
-      models = VISION_MODELS;
-    }
+        ];
+      }
+    };
 
-    // ── Prova i modelli in ordine ─────────────────────────────────────
+    const content = buildContent();
     let lastError = null;
 
-    for (const model of models) {
+    for (const model of MODELS) {
       try {
         const orRes = await fetch(OPENROUTER_URL, {
           method: "POST",
@@ -125,7 +100,7 @@ export default async function handler(req, res) {
           },
           body: JSON.stringify({
             model,
-            messages,
+            messages: [{ role: "user", content }],
             temperature: 0.1,
             max_tokens:  1024,
           }),
@@ -134,8 +109,8 @@ export default async function handler(req, res) {
         const orData = await orRes.json();
 
         if (!orRes.ok) {
-          lastError = orData?.error?.message ?? `HTTP ${orRes.status} da ${model}`;
-          console.warn(`${model} errore:`, lastError);
+          lastError = orData?.error?.message ?? `HTTP ${orRes.status}`;
+          console.warn(`${model} fallito:`, lastError);
           continue;
         }
 
@@ -143,8 +118,8 @@ export default async function handler(req, res) {
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
 
         if (!jsonMatch) {
-          lastError = `Nessun JSON da ${model}`;
-          console.warn(lastError, rawText.slice(0, 200));
+          lastError = `Nessun JSON da ${model}: ${rawText.slice(0, 150)}`;
+          console.warn(lastError);
           continue;
         }
 
@@ -158,7 +133,7 @@ export default async function handler(req, res) {
 
         if (!parsed.pod_pdr) {
           return res.status(422).json({
-            error: "POD/PDR non trovato nella bolletta. Controlla che il PDF contenga il codice POD o PDR.",
+            error: "POD/PDR non trovato. Controlla che il PDF contenga il codice POD o PDR.",
           });
         }
 
@@ -172,7 +147,7 @@ export default async function handler(req, res) {
     }
 
     return res.status(502).json({
-      error:  "Nessun modello disponibile al momento. Riprova tra qualche minuto.",
+      error:  "Nessun modello disponibile. Riprova tra qualche minuto.",
       detail: lastError,
     });
 

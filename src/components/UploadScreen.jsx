@@ -68,7 +68,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       const d = datiEstrat;
       const podPdr = d.pod_pdr ?? `SCONOSCIUTO-${Date.now()}`;
 
-      // Cerca fornitura esistente
       const { data: esistente, error: errQ } = await supabase
         .from("forniture").select("id")
         .eq("utente_id", user.id).eq("pod_pdr", podPdr).maybeSingle();
@@ -78,7 +77,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       let fornituraId;
       if (esistente) {
         fornituraId = esistente.id;
-        // Aggiorna intestatario se presente
         if (d.intestatario) {
           await supabase.from("forniture").update({ intestatario: d.intestatario }).eq("id", fornituraId);
         }
@@ -153,14 +151,14 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:18, padding:"20px 16px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
               <div style={{ background:C.skyDim, borderRadius:12, padding:12 }}><Camera size={24} color={C.sky} /></div>
               <div style={{ textAlign:"center" }}>
-                <p style={{ color:C.text, fontSize:13, fontWeight:700, margin:"0 0 3px" }}>Fotografa</p>
-                <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.4 }}>Scatta o carica<br/>foto/screenshot</p>
+                <p style={{ color:C.text, fontSize:13, fontWeight:700, margin:"0 0 3px" }}>Foto / Screenshot</p>
+                <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.4 }}>Fotocamera o<br/>rullino foto</p>
               </div>
             </button>
           </div>
           <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:16 }}>
             <p style={{ color:C.textMid, fontSize:12, fontWeight:600, margin:"0 0 10px" }}>💡 Come funziona</p>
-            {["Carica il PDF oppure fotografa la bolletta","L'AI estrae automaticamente prezzi, consumi e POD/PDR","Controlla i dati e salvali con un tap"].map((t,i) => (
+            {["Carica il PDF oppure una foto della bolletta","L'AI estrae automaticamente prezzi, consumi e POD/PDR","Controlla i dati e salvali con un tap"].map((t,i) => (
               <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, marginBottom:i<2?10:0 }}>
                 <div style={{ background:C.amberDim, borderRadius:"50%", width:20, height:20, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
                   <span style={{ color:C.amber, fontSize:10, fontWeight:700 }}>{i+1}</span>
@@ -180,7 +178,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
             <p style={{ color:C.textDim, fontSize:12, margin:0 }}>{fileName}</p>
           </div>
           <p style={{ color:C.textDim, fontSize:11, textAlign:"center", lineHeight:1.6 }}>
-            Lettura bolletta in corso,<br/>può richiedere 15–30 secondi
+            Può richiedere 15–30 secondi
           </p>
         </div>
       )}
@@ -275,9 +273,12 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         </div>
       )}
 
-      <input ref={fileRef} type="file" accept=".pdf" style={{ display:"none" }}
+      {/* PDF input */}
+      <input ref={fileRef} type="file" accept=".pdf,application/pdf" style={{ display:"none" }}
         onChange={e => e.target.files[0] && parseFile(e.target.files[0])} />
-      <input ref={imgRef} type="file" accept="image/*" capture="environment" style={{ display:"none" }}
+
+      {/* Immagine — NO capture, così su iPhone mostra sia fotocamera che rullino */}
+      <input ref={imgRef} type="file" accept="image/*" style={{ display:"none" }}
         onChange={e => e.target.files[0] && parseFile(e.target.files[0])} />
 
       <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
