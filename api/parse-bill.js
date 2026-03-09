@@ -1,10 +1,23 @@
 // api/parse-bill.js
-// PDF → OpenRouter file type nativo (niente pdf-parse, niente dipendenze)
-// Immagine → base64 image_url
+// PDF  → riceve testo già estratto dal browser → modelli testo (stabili)
+// Immagine → riceve base64 → modelli vision
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
+// Modelli TESTO confermati nella lista free (per PDF)
+const TEXT_MODELS = [
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemma-3-27b-it:free",
+  "google/gemma-3-12b-it:free",
+];
+
+// Modelli VISION per immagini
+const VISION_MODELS = [
+  "nvidia/nemotron-nano-12b-v2-vl:free",
+  "mistralai/mistral-small-3.1-24b-instruct:free",
+];
+
+const PROMPT_BASE = `Analizza questo testo di una bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
 Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun backtick.
 
 {
@@ -27,16 +40,8 @@ Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun back
 
 Regole:
 - tipo_utenza: elettricità/luce = LUCE, gas = GAS
-- pod_pdr: per luce "POD" + "IT...", per gas "PDR" + numero. OBBLIGATORIO.
-- intestatario: nome completo scritto sulla bolletta
+- pod_pdr: per luce cerca "POD" + "IT...", per gas cerca "PDR" + numero. OBBLIGATORIO.
 - Se un campo non è presente usa null`;
-
-// Modelli in ordine di preferenza — tutti free
-const MODELS = [
-  "qwen/qwen2.5-vl-72b-instruct:free",
-  "google/gemma-3-27b-it:free",
-  "deepseek/deepseek-r1-0528:free",
-];
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -59,36 +64,43 @@ export default async function handler(req, res) {
       req.on("error", reject);
     });
 
-    const { mimeType, data: b64data } = body;
-    if (!mimeType || !b64data) {
-      return res.status(400).json({ error: "Campi mimeType e data obbligatori" });
+    let messages, models;
+
+    if (body.type === "text") {
+      // PDF: testo già estratto dal browser
+      const { text } = body;
+      if (!text || text.trim().length < 30) {
+        return res.status(400).json({ error: "Testo troppo corto o vuoto" });
+      }
+      messages = [{
+        role: "user",
+        content: `${PROMPT_BASE}\n\nTESTO BOLLETTA:\n${text.slice(0, 8000)}`,
+      }];
+      models = TEXT_MODELS;
+
+    } else if (body.type === "image") {
+      // Immagine: base64
+      const { mimeType, data: b64data } = body;
+      if (!mimeType || !b64data) {
+        return res.status(400).json({ error: "Campi mimeType e data obbligatori" });
+      }
+      messages = [{
+        role: "user",
+        content: [
+          { type: "text",      text: PROMPT_BASE },
+          { type: "image_url", image_url: { url: `data:${mimeType};base64,${b64data}` } },
+        ],
+      }];
+      models = VISION_MODELS;
+
+    } else {
+      return res.status(400).json({ error: "Campo type obbligatorio: 'text' o 'image'" });
     }
 
-    // Costruisce il content in base al tipo file
-    const buildContent = () => {
-      if (mimeType === "application/pdf") {
-        return [
-          { type: "text", text: PROMPT },
-          {
-            type: "file",
-            file: {
-              filename:  "bolletta.pdf",
-              file_data: `data:application/pdf;base64,${b64data}`,
-            },
-          },
-        ];
-      } else {
-        return [
-          { type: "text", text: PROMPT },
-          { type: "image_url", image_url: { url: `data:${mimeType};base64,${b64data}` } },
-        ];
-      }
-    };
-
-    const content = buildContent();
+    // Prova modelli in ordine
     let lastError = null;
 
-    for (const model of MODELS) {
+    for (const model of models) {
       try {
         const orRes = await fetch(OPENROUTER_URL, {
           method: "POST",
@@ -100,7 +112,7 @@ export default async function handler(req, res) {
           },
           body: JSON.stringify({
             model,
-            messages: [{ role: "user", content }],
+            messages,
             temperature: 0.1,
             max_tokens:  1024,
           }),
@@ -110,7 +122,7 @@ export default async function handler(req, res) {
 
         if (!orRes.ok) {
           lastError = orData?.error?.message ?? `HTTP ${orRes.status}`;
-          console.warn(`${model} fallito:`, lastError);
+          console.warn(`${model} errore:`, lastError);
           continue;
         }
 
@@ -127,13 +139,12 @@ export default async function handler(req, res) {
         try { parsed = JSON.parse(jsonMatch[0]); }
         catch {
           lastError = `JSON malformato da ${model}`;
-          console.warn(lastError);
           continue;
         }
 
         if (!parsed.pod_pdr) {
           return res.status(422).json({
-            error: "POD/PDR non trovato. Controlla che il PDF contenga il codice POD o PDR.",
+            error: "POD/PDR non trovato. Controlla che la bolletta contenga il codice POD (luce) o PDR (gas).",
           });
         }
 
@@ -141,7 +152,6 @@ export default async function handler(req, res) {
 
       } catch (fetchErr) {
         lastError = fetchErr.message;
-        console.warn(`Errore fetch ${model}:`, fetchErr.message);
         continue;
       }
     }

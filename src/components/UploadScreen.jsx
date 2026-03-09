@@ -13,6 +13,33 @@ const C = {
   text:"#ffffff", textMid:"#9ca3af", textDim:"#4b5563",
 };
 
+// ── Estrae testo da PDF usando pdf.js via CDN ──────────────────────────────
+async function extractPdfText(file) {
+  // Carica pdf.js dal CDN se non già caricato
+  if (!window.pdfjsLib) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  let fullText = "";
+  for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    fullText += content.items.map(item => item.str).join(" ") + "\n";
+  }
+  return fullText.trim();
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -38,14 +65,29 @@ export default function UploadScreen({ user, onBollettaSaved }) {
     setFileName(file.name);
     setFase("parsing");
     setErrore(null);
-    try {
-      const b64  = await fileToBase64(file);
-      const mime = file.type || "application/pdf";
 
-      const res  = await fetch("/api/parse-bill", {
+    try {
+      const isPdf = file.type === "application/pdf" || file.name.endsWith(".pdf");
+      let payload;
+
+      if (isPdf) {
+        // Estrai testo nel browser — niente vision richiesta
+        const testo = await extractPdfText(file);
+        if (!testo || testo.length < 50) {
+          throw new Error("PDF senza testo selezionabile (è una scansione). Fotografa la bolletta invece.");
+        }
+        payload = { type: "text", text: testo.slice(0, 8000) };
+      } else {
+        // Immagine — manda base64
+        const b64  = await fileToBase64(file);
+        const mime = file.type || "image/jpeg";
+        payload = { type: "image", mimeType: mime, data: b64 };
+      }
+
+      const res = await fetch("/api/parse-bill", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ mimeType: mime, data: b64 }),
+        body:    JSON.stringify(payload),
       });
 
       const json = await res.json();
@@ -123,7 +165,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       onBollettaSaved?.();
 
     } catch (err) {
-      console.error("Errore salvataggio:", err.message);
       setErrore(err.message);
       setFase("error");
     }
@@ -245,9 +286,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
             <CheckCircle size={40} color={C.green} />
             <div style={{ textAlign:"center" }}>
               <p style={{ color:C.green, fontSize:16, fontWeight:700, margin:"0 0 6px" }}>Bolletta salvata!</p>
-              <p style={{ color:C.textDim, fontSize:12, margin:0, lineHeight:1.6 }}>
-                Torna alla Home per vedere i grafici aggiornati.
-              </p>
+              <p style={{ color:C.textDim, fontSize:12, margin:0, lineHeight:1.6 }}>Torna alla Home per vedere i grafici aggiornati.</p>
             </div>
           </div>
           <button onClick={reset} style={{ width:"100%", padding:"14px", borderRadius:18, background:C.surface, border:`1px solid ${C.border}`, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
@@ -273,11 +312,8 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         </div>
       )}
 
-      {/* PDF input */}
       <input ref={fileRef} type="file" accept=".pdf,application/pdf" style={{ display:"none" }}
         onChange={e => e.target.files[0] && parseFile(e.target.files[0])} />
-
-      {/* Immagine — NO capture, così su iPhone mostra sia fotocamera che rullino */}
       <input ref={imgRef} type="file" accept="image/*" style={{ display:"none" }}
         onChange={e => e.target.files[0] && parseFile(e.target.files[0])} />
 
