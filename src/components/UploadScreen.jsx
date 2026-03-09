@@ -13,11 +13,10 @@ const C = {
   text:"#ffffff", textMid:"#9ca3af", textDim:"#4b5563",
 };
 
-// Converte File → base64 string
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result.split(",")[1]); // strip "data:...;base64,"
+    reader.onload  = () => resolve(reader.result.split(",")[1]);
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
@@ -35,17 +34,15 @@ export default function UploadScreen({ user, onBollettaSaved }) {
     setFase("idle"); setErrore(null); setDatiEstrat(null); setFileName(null);
   };
 
-  // 1. Converti in base64 e invia a /api/parse-bill come JSON
   const parseFile = async (file) => {
     setFileName(file.name);
-    setFase("uploading");
+    setFase("parsing");
     setErrore(null);
     try {
-      setFase("parsing");
       const b64  = await fileToBase64(file);
       const mime = file.type || "application/pdf";
 
-      const res = await fetch("/api/parse-bill", {
+      const res  = await fetch("/api/parse-bill", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ mimeType: mime, data: b64 }),
@@ -62,42 +59,52 @@ export default function UploadScreen({ user, onBollettaSaved }) {
     }
   };
 
-  // 2. Salva su Supabase (crea fornitura se non esiste)
   const salva = async () => {
     if (!datiEstrat || !user) return;
     setFase("saving");
+    setErrore(null);
+
     try {
       const d = datiEstrat;
 
-      // Cerca o crea fornitura con questo POD/PDR
-      let fornituraId;
-      const { data: esistente } = await supabase
-        .from("forniture").select("id")
-        .eq("utente_id", user.id).eq("pod_pdr", d.pod_pdr).maybeSingle();
+      // Fallback: se pod_pdr è null usa un placeholder temporaneo
+      const podPdr = d.pod_pdr ?? `SCONOSCIUTO-${Date.now()}`;
 
+      // Cerca fornitura esistente con questo POD/PDR
+      const { data: esistente, error: errQ } = await supabase
+        .from("forniture").select("id")
+        .eq("utente_id", user.id)
+        .eq("pod_pdr", podPdr)
+        .maybeSingle();
+
+      if (errQ) throw new Error(`Errore ricerca fornitura: ${errQ.message}`);
+
+      let fornituraId;
       if (esistente) {
         fornituraId = esistente.id;
       } else {
         const { data: nuova, error: errF } = await supabase
           .from("forniture").insert({
             utente_id:             user.id,
-            tipo_utenza:           d.tipo_utenza,
-            pod_pdr:               d.pod_pdr,
-            fornitore:             d.fornitore,
+            tipo_utenza:           d.tipo_utenza ?? "LUCE",
+            pod_pdr:               podPdr,
+            fornitore:             d.fornitore ?? "Sconosciuto",
             nome_offerta:          d.nome_offerta,
             data_scadenza_offerta: d.data_scadenza_offerta,
           }).select("id").single();
-        if (errF) throw new Error(errF.message);
+
+        if (errF) throw new Error(`Errore creazione fornitura: ${errF.message}`);
         fornituraId = nuova.id;
 
         if (d.prezzo_materia_prima) {
-          await supabase.from("tariffe").insert({
+          const { error: errT } = await supabase.from("tariffe").insert({
             fornitura_id:         fornituraId,
             tipo_prezzo:          d.tipo_prezzo ?? "FISSO",
             prezzo_materia_prima: d.prezzo_materia_prima,
             data_inizio:          d.periodo_inizio ?? new Date().toISOString().slice(0,10),
             data_fine:            d.data_scadenza_offerta,
           });
+          if (errT) console.warn("Tariffa non salvata:", errT.message);
         }
       }
 
@@ -111,11 +118,14 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         stato:             "pagata",
         dati_estratti:     d,
       });
-      if (errB) throw new Error(errB.message);
+
+      if (errB) throw new Error(`Errore salvataggio bolletta: ${errB.message}`);
 
       setFase("saved");
       onBollettaSaved?.();
+
     } catch (err) {
+      console.error("Errore salvataggio:", err.message);
       setErrore(err.message);
       setFase("error");
     }
@@ -128,7 +138,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         <h2 style={{ color:C.text, fontSize:24, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>Carica bolletta</h2>
       </div>
 
-      {/* IDLE */}
       {fase === "idle" && (
         <>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
@@ -171,31 +180,25 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         </>
       )}
 
-      {/* PARSING / UPLOADING */}
-      {(fase === "uploading" || fase === "parsing") && (
+      {fase === "parsing" && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:32, display:"flex", flexDirection:"column", alignItems:"center", gap:16 }}>
           <Loader2 size={36} color={C.amber} style={{ animation:"spin 1s linear infinite" }} />
           <div style={{ textAlign:"center" }}>
-            <p style={{ color:C.text, fontSize:15, fontWeight:700, margin:"0 0 6px" }}>
-              {fase === "uploading" ? "Caricamento..." : "Analisi AI in corso..."}
-            </p>
+            <p style={{ color:C.text, fontSize:15, fontWeight:700, margin:"0 0 6px" }}>Analisi AI in corso...</p>
             <p style={{ color:C.textDim, fontSize:12, margin:0 }}>{fileName}</p>
           </div>
-          {fase === "parsing" && (
-            <p style={{ color:C.textDim, fontSize:11, textAlign:"center", lineHeight:1.6 }}>
-              Gemini sta leggendo la bolletta e<br/>estrae automaticamente tutti i dati
-            </p>
-          )}
+          <p style={{ color:C.textDim, fontSize:11, textAlign:"center", lineHeight:1.6 }}>
+            Lettura bolletta in corso,<br/>può richiedere 10–20 secondi
+          </p>
         </div>
       )}
 
-      {/* REVIEW */}
       {fase === "review" && datiEstrat && (
         <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
           <div style={{ background:"#0d1a0d", border:`1px solid ${C.green}33`, borderRadius:20, padding:18 }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
               <CheckCircle size={18} color={C.green} />
-              <p style={{ color:C.green, fontSize:13, fontWeight:700, margin:0 }}>Dati estratti correttamente</p>
+              <p style={{ color:C.green, fontSize:13, fontWeight:700, margin:0 }}>Dati estratti</p>
             </div>
             <div style={{ marginBottom:14 }}>
               <span style={{
@@ -215,9 +218,9 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                                    ? `${fmt(datiEstrat.periodo_inizio)} → ${fmt(datiEstrat.periodo_fine)}` : null],
               ["Consumo",          datiEstrat.consumo_fatturato != null
                                    ? `${datiEstrat.consumo_fatturato} ${datiEstrat.unita_misura ?? ""}` : null],
-              ["Tariffa energia",  datiEstrat.prezzo_materia_prima != null
-                                   ? `${datiEstrat.prezzo_materia_prima} €/${datiEstrat.unita_misura ?? "kWh"} (${datiEstrat.tipo_prezzo ?? ""})` : null],
-              ["Totale da pagare", datiEstrat.totale_pagare != null ? `${datiEstrat.totale_pagare} €` : null],
+              ["Tariffa",          datiEstrat.prezzo_materia_prima != null
+                                   ? `${datiEstrat.prezzo_materia_prima} €/${datiEstrat.unita_misura ?? "kWh"}` : null],
+              ["Totale",           datiEstrat.totale_pagare != null ? `${datiEstrat.totale_pagare} €` : null],
               ["Scadenza offerta", datiEstrat.data_scadenza_offerta ? fmt(datiEstrat.data_scadenza_offerta) : null],
             ].filter(([,v]) => v != null).map(([k,v]) => (
               <div key={k} style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, gap:12 }}>
@@ -243,7 +246,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         </div>
       )}
 
-      {/* SAVING */}
       {fase === "saving" && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:32, display:"flex", flexDirection:"column", alignItems:"center", gap:16 }}>
           <Loader2 size={36} color={C.green} style={{ animation:"spin 1s linear infinite" }} />
@@ -251,7 +253,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         </div>
       )}
 
-      {/* SAVED */}
       {fase === "saved" && (
         <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
           <div style={{ background:"#0d1a0d", border:`1px solid ${C.green}33`, borderRadius:20, padding:28, display:"flex", flexDirection:"column", alignItems:"center", gap:14 }}>
@@ -270,13 +271,12 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         </div>
       )}
 
-      {/* ERROR */}
       {fase === "error" && (
         <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
           <div style={{ background:C.redDim, border:`1px solid ${C.red}33`, borderRadius:20, padding:24, display:"flex", flexDirection:"column", alignItems:"center", gap:14 }}>
             <AlertCircle size={36} color={C.red} />
             <div style={{ textAlign:"center" }}>
-              <p style={{ color:C.red, fontSize:14, fontWeight:700, margin:"0 0 8px" }}>Errore nell'analisi</p>
+              <p style={{ color:C.red, fontSize:14, fontWeight:700, margin:"0 0 8px" }}>Errore</p>
               <p style={{ color:C.textDim, fontSize:12, margin:0, lineHeight:1.6 }}>{errore}</p>
             </div>
           </div>
