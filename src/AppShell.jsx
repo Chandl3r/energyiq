@@ -447,46 +447,125 @@ function Dashboard({ user, dati, onGoUpload }) {
 }
 
 function MercatoScreen({ dati }) {
-  const { indici = [] } = dati ?? {};
+  const { indici = [], forniture = [], bollette = [] } = dati ?? {};
+
+  // Ultimi PUN e PSV disponibili
   const pun = [...indici].filter(i => i.tipo_indice === "PUN").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
   const psv = [...indici].filter(i => i.tipo_indice === "PSV").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
 
+  // Prezzo fisso dalla bolletta più recente (per tipo)
+  const ultimaBollettaLuce = [...bollette].filter(b => b.forniture?.tipo_utenza === "LUCE")
+    .sort((a,b) => new Date(b.periodo_fine) - new Date(a.periodo_fine))[0];
+  const ultimaBollettaGas  = [...bollette].filter(b => b.forniture?.tipo_utenza === "GAS")
+    .sort((a,b) => new Date(b.periodo_fine) - new Date(a.periodo_fine))[0];
+
+  const tariffaLuce = parseFloat(ultimaBollettaLuce?.dati_estratti?.prezzo_materia_prima) || null;
+  const tariffaGas  = parseFloat(ultimaBollettaGas?.dati_estratti?.prezzo_materia_prima)  || null;
+
+  // Consumo annuo stimato (somma bollette)
+  const consumoLuceAnnuo = bollette.filter(b => b.forniture?.tipo_utenza === "LUCE")
+    .reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
+  const consumoGasAnnuo  = bollette.filter(b => b.forniture?.tipo_utenza === "GAS")
+    .reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
+
+  // Delta: positivo = mercato più economico (potrei risparmiare), negativo = la mia tariffa è più economica
+  const deltaLuce = (pun && tariffaLuce) ? tariffaLuce - pun.valore_medio : null;
+  const deltaGas  = (psv && tariffaGas)  ? tariffaGas  - psv.valore_medio  : null;
+
+  // Risparmio/perdita annua stimata
+  const risparmioLuce = (deltaLuce !== null && consumoLuceAnnuo) ? deltaLuce * consumoLuceAnnuo : null;
+  const risparmioGas  = (deltaGas  !== null && consumoGasAnnuo)  ? deltaGas  * consumoGasAnnuo  : null;
+
+  const IndiceCard = ({ label, icon, color, dim, mid, bg, mercato, tariffa, unit, delta, risparmio, consumoAnnuo, mese }) => {
+    const hasTariffa = tariffa !== null;
+    const risparmioPositivo = risparmio > 0;
+    return (
+      <div style={{ background:bg, border:`1px solid ${mid}`, borderRadius:20, padding:20 }}>
+        {/* Header */}
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+          <div style={{ background:dim, borderRadius:8, padding:6 }}>{icon}</div>
+          <span style={{ color:color, fontSize:11, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase" }}>{label}</span>
+          {mese && <span style={{ background:dim, color:color, fontSize:10, fontWeight:700, borderRadius:20, padding:"2px 8px" }}>{mese}</span>}
+        </div>
+        {/* Valore mercato */}
+        <p style={{ color:C.text, fontSize:34, fontWeight:800, margin:"0 0 2px", fontFamily:"'Sora',sans-serif" }}>
+          {mercato !== null ? Number(mercato).toFixed(4) : "—"}
+          {" "}<span style={{ fontSize:14, color:C.textMid }}>{unit}</span>
+        </p>
+        <p style={{ color:C.textDim, fontSize:11, margin:"0 0 14px" }}>Prezzo mercato all'ingrosso</p>
+        {/* Confronto tariffa */}
+        {hasTariffa && mercato !== null ? (
+          <div style={{ borderTop:`1px solid ${mid}`, paddingTop:14 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+              <span style={{ color:C.textMid, fontSize:12 }}>La tua tariffa</span>
+              <span style={{ color:C.text, fontSize:14, fontWeight:700, fontFamily:"'Sora',sans-serif" }}>
+                {Number(tariffa).toFixed(4)} {unit}
+              </span>
+            </div>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+              <span style={{ color:C.textMid, fontSize:12 }}>Differenza</span>
+              <span style={{ color: delta > 0 ? C.red : C.green, fontSize:14, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>
+                {delta > 0 ? "+" : ""}{Number(delta).toFixed(4)} {unit}
+              </span>
+            </div>
+            {/* Stima risparmio annuo */}
+            {consumoAnnuo > 0 && (
+              <div style={{
+                background: risparmioPositivo ? C.redDim : C.greenDim,
+                borderRadius:12, padding:"12px 14px",
+                display:"flex", justifyContent:"space-between", alignItems:"center"
+              }}>
+                <div>
+                  <p style={{ color:C.textMid, fontSize:11, margin:"0 0 2px" }}>
+                    {risparmioPositivo ? "Spendi in più vs mercato" : "Risparmi vs mercato"}
+                  </p>
+                  <p style={{ color:risparmioPositivo ? C.red : C.green, fontSize:9, margin:0 }}>
+                    {Math.round(consumoAnnuo).toLocaleString("it-IT")} {unit === "€/kWh" ? "kWh" : "Smc"} × {Math.abs(delta).toFixed(4)}
+                  </p>
+                </div>
+                <span style={{ color: risparmioPositivo ? C.red : C.green, fontSize:20, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>
+                  {risparmioPositivo ? "+" : "-"}{Math.abs(Math.round(risparmio)).toLocaleString("it-IT")} €
+                </span>
+              </div>
+            )}
+          </div>
+        ) : hasTariffa ? (
+          <p style={{ color:C.textDim, fontSize:12, marginTop:8 }}>Aggiorna gli indici di mercato per vedere il confronto</p>
+        ) : (
+          <p style={{ color:C.textDim, fontSize:12, marginTop:8 }}>Carica una bolletta per vedere il confronto con la tua tariffa</p>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16, paddingBottom:8 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-        <div>
-          <p style={{ color:C.textDim, fontSize:12, margin:"0 0 4px", letterSpacing:2, textTransform:"uppercase" }}>Live</p>
-          <h2 style={{ color:C.text, fontSize:24, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>Mercato</h2>
-        </div>
-        <button style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:10, cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
-          <RefreshCw size={14} color={C.textDim} />
-          <span style={{ color:C.textDim, fontSize:11 }}>Aggiorna</span>
-        </button>
+      <div>
+        <p style={{ color:C.textDim, fontSize:12, margin:"0 0 4px", letterSpacing:2, textTransform:"uppercase" }}>Indici</p>
+        <h2 style={{ color:C.text, fontSize:24, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>Mercato</h2>
       </div>
-      {[
-        { label:"PUN · Luce", icon:<Zap size={14} color={C.amber}/>, color:C.amber, dim:C.amberDim, mid:C.amberMid,
-          value: pun ? pun.valore_medio : "—", unit:"€/kWh", bg:`linear-gradient(135deg,#1a0f00,${C.surface})`,
-          mese: pun ? meseFmt(pun.mese_anno) : "" },
-        { label:"PSV · Gas", icon:<Flame size={14} color={C.sky}/>, color:C.sky, dim:C.skyDim, mid:C.skyMid,
-          value: psv ? psv.valore_medio : "—", unit:"€/Smc", bg:`linear-gradient(135deg,#001824,${C.surface})`,
-          mese: psv ? meseFmt(psv.mese_anno) : "" },
-      ].map((m,i) => (
-        <div key={i} style={{ background:m.bg, border:`1px solid ${m.mid}`, borderRadius:20, padding:20 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
-            <div style={{ background:m.dim, borderRadius:8, padding:6 }}>{m.icon}</div>
-            <span style={{ color:m.color, fontSize:11, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase" }}>{m.label}</span>
-            {m.mese && <span style={{ background:m.dim, color:m.color, fontSize:10, fontWeight:700, borderRadius:20, padding:"2px 8px" }}>{m.mese}</span>}
-          </div>
-          <p style={{ color:C.text, fontSize:34, fontWeight:800, margin:"0 0 4px", fontFamily:"'Sora',sans-serif" }}>
-            {typeof m.value === "number" ? m.value.toFixed(4) : m.value}{" "}
-            <span style={{ fontSize:14, color:C.textMid }}>{m.unit}</span>
-          </p>
-        </div>
-      ))}
+
+      <IndiceCard
+        label="PUN · Luce" icon={<Zap size={14} color={C.amber}/>}
+        color={C.amber} dim={C.amberDim} mid={C.amberMid}
+        bg={`linear-gradient(135deg,#1a0f00,${C.surface})`}
+        mercato={pun?.valore_medio ?? null} tariffa={tariffaLuce} unit="€/kWh"
+        delta={deltaLuce} risparmio={risparmioLuce} consumoAnnuo={consumoLuceAnnuo}
+        mese={pun ? meseFmt(pun.mese_anno) : ""}
+      />
+      <IndiceCard
+        label="PSV · Gas" icon={<Flame size={14} color={C.sky}/>}
+        color={C.sky} dim={C.skyDim} mid={C.skyMid}
+        bg={`linear-gradient(135deg,#001824,${C.surface})`}
+        mercato={psv?.valore_medio ?? null} tariffa={tariffaGas} unit="€/Smc"
+        delta={deltaGas} risparmio={risparmioGas} consumoAnnuo={consumoGasAnnuo}
+        mese={psv ? meseFmt(psv.mese_anno) : ""}
+      />
+
       <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:14, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
         <div>
           <p style={{ color:C.textMid, fontSize:12, fontWeight:600, margin:"0 0 2px" }}>Fonte dati</p>
-          <p style={{ color:C.textDim, fontSize:11, margin:0 }}>GME · Indici mensili</p>
+          <p style={{ color:C.textDim, fontSize:11, margin:0 }}>GME · Aggiornamento manuale mensile</p>
         </div>
         <ArrowUpRight size={16} color={C.textDim} />
       </div>
@@ -495,7 +574,7 @@ function MercatoScreen({ dati }) {
 }
 
 function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
-  const { forniture = [], bollette = [] } = dati ?? {};
+  const { forniture = [], bollette = [], indici = [] } = dati ?? {};
   const nomeUtente = user?.user_metadata?.full_name ?? user?.email?.split("@")[0] ?? "Utente";
   const email = user?.email ?? "";
 
@@ -503,6 +582,12 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
   const [editingId,  setEditingId]  = useState(null);
   const [editValue,  setEditValue]  = useState("");
   const [loading,    setLoading]    = useState(false);
+
+  // Stato aggiornamento indici
+  const now = new Date();
+  const meseDefault = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+  const [indiciForm, setIndiciForm] = useState({ mese: meseDefault, pun: "", psv: "" });
+  const [indiciSaved, setIndiciSaved] = useState(false);
 
   const tuttiOrdinate = [...bollette]
     .sort((a,b) => new Date(b.data_emissione||b.periodo_fine) - new Date(a.data_emissione||a.periodo_fine));
@@ -523,6 +608,25 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
     onRefresh?.();
   };
 
+  const salvaIndici = async () => {
+    const { mese, pun, psv } = indiciForm;
+    if (!mese || (!pun && !psv)) return;
+    setLoading(true);
+    const meseAnno = `${mese}-01`;
+    const rows = [];
+    if (pun) rows.push({ tipo_indice:"PUN", mese_anno:meseAnno, valore_medio:parseFloat(pun.replace(",",".")), fonte:"GME" });
+    if (psv) rows.push({ tipo_indice:"PSV", mese_anno:meseAnno, valore_medio:parseFloat(psv.replace(",",".")), fonte:"GME" });
+    await supabase.from("indici_mercato").upsert(rows, { onConflict:"tipo_indice,mese_anno" });
+    setLoading(false);
+    setIndiciSaved(true);
+    setTimeout(() => setIndiciSaved(false), 3000);
+    onRefresh?.();
+  };
+
+  // Ultimi indici salvati
+  const ultimoPUN = [...indici].filter(i => i.tipo_indice === "PUN").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
+  const ultimoPSV = [...indici].filter(i => i.tipo_indice === "PSV").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
+
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16, paddingBottom:8 }}>
       <div>
@@ -530,6 +634,7 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
         <h2 style={{ color:C.text, fontSize:24, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>Impostazioni</h2>
       </div>
 
+      {/* Avatar */}
       <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20, display:"flex", alignItems:"center", gap:16 }}>
         <div style={{ width:56, height:56, borderRadius:"50%", background:`linear-gradient(135deg,${C.amber},#ef4444)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:20, fontWeight:800, color:"#fff", flexShrink:0 }}>
           {nomeUtente.slice(0,2).toUpperCase()}
@@ -541,6 +646,64 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
         </div>
       </div>
 
+      {/* Aggiorna indici mercato */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
+          <div>
+            <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:0 }}>Indici mercato</p>
+            <p style={{ color:C.textDim, fontSize:11, margin:"3px 0 0" }}>
+              Aggiorna una volta al mese da{" "}
+              <span style={{ color:C.amber }}>facile.it</span> o <span style={{ color:C.amber }}>switcho.it</span>
+            </p>
+          </div>
+          {indiciSaved && (
+            <span style={{ background:C.greenDim, color:C.green, fontSize:11, fontWeight:700, borderRadius:20, padding:"3px 10px" }}>
+              Salvato ✓
+            </span>
+          )}
+        </div>
+        {(ultimoPUN || ultimoPSV) && (
+          <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+            {ultimoPUN && (
+              <div style={{ flex:1, background:C.amberDim, borderRadius:10, padding:"8px 10px" }}>
+                <p style={{ color:C.textDim, fontSize:9, margin:"0 0 2px", textTransform:"uppercase", letterSpacing:1 }}>PUN {meseFmt(ultimoPUN.mese_anno)}</p>
+                <p style={{ color:C.amber, fontSize:14, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>{Number(ultimoPUN.valore_medio).toFixed(4)} €/kWh</p>
+              </div>
+            )}
+            {ultimoPSV && (
+              <div style={{ flex:1, background:C.skyDim, borderRadius:10, padding:"8px 10px" }}>
+                <p style={{ color:C.textDim, fontSize:9, margin:"0 0 2px", textTransform:"uppercase", letterSpacing:1 }}>PSV {meseFmt(ultimoPSV.mese_anno)}</p>
+                <p style={{ color:C.sky, fontSize:14, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>{Number(ultimoPSV.valore_medio).toFixed(4)} €/Smc</p>
+              </div>
+            )}
+          </div>
+        )}
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          <input type="month" value={indiciForm.mese}
+            onChange={e => setIndiciForm(f => ({...f, mese:e.target.value}))}
+            style={{ background:C.bg, border:`1px solid ${C.border2}`, borderRadius:10, padding:"8px 12px", color:C.text, fontSize:13, outline:"none", width:"100%" }} />
+          <div style={{ display:"flex", gap:8 }}>
+            <div style={{ flex:1 }}>
+              <p style={{ color:C.amber, fontSize:10, fontWeight:700, margin:"0 0 4px", letterSpacing:1 }}>PUN (€/kWh)</p>
+              <input placeholder="es. 0.1144" value={indiciForm.pun}
+                onChange={e => setIndiciForm(f => ({...f, pun:e.target.value}))}
+                style={{ width:"100%", background:C.bg, border:`1px solid ${C.border2}`, borderRadius:10, padding:"8px 12px", color:C.text, fontSize:13, outline:"none" }} />
+            </div>
+            <div style={{ flex:1 }}>
+              <p style={{ color:C.sky, fontSize:10, fontWeight:700, margin:"0 0 4px", letterSpacing:1 }}>PSV (€/Smc)</p>
+              <input placeholder="es. 0.6310" value={indiciForm.psv}
+                onChange={e => setIndiciForm(f => ({...f, psv:e.target.value}))}
+                style={{ width:"100%", background:C.bg, border:`1px solid ${C.border2}`, borderRadius:10, padding:"8px 12px", color:C.text, fontSize:13, outline:"none" }} />
+            </div>
+          </div>
+          <button onClick={salvaIndici} disabled={loading || (!indiciForm.pun && !indiciForm.psv)}
+            style={{ background:C.amber, border:"none", borderRadius:12, padding:"12px", cursor:"pointer", color:"#000", fontSize:13, fontWeight:700, opacity:(!indiciForm.pun && !indiciForm.psv)?0.4:1 }}>
+            {loading ? "Salvataggio..." : "Salva indici"}
+          </button>
+        </div>
+      </div>
+
+      {/* Forniture con nickname */}
       {forniture.length > 0 && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:"0 0 14px" }}>Le tue forniture</p>
@@ -592,15 +755,16 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
         </div>
       )}
 
+      {/* Lista bollette con elimina */}
       {tuttiOrdinate.length > 0 && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:"0 0 14px" }}>Bollette salvate</p>
           {tuttiOrdinate.map((b, i) => {
-            const isLuce = b.forniture?.tipo_utenza === "LUCE";
-            const color  = isLuce ? C.amber : C.sky;
-            const dim    = isLuce ? C.amberDim : C.skyDim;
-            const icon   = isLuce ? <Zap size={13} color={color}/> : <Flame size={13} color={color}/>;
-            const isConf = deletingId === b.id;
+            const isLuce  = b.forniture?.tipo_utenza === "LUCE";
+            const color   = isLuce ? C.amber : C.sky;
+            const dim     = isLuce ? C.amberDim : C.skyDim;
+            const icon    = isLuce ? <Zap size={13} color={color}/> : <Flame size={13} color={color}/>;
+            const isConf  = deletingId === b.id;
             return (
               <div key={b.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:C.surface2, borderRadius:14, padding:"12px 14px", marginBottom:i<tuttiOrdinate.length-1?8:0, border:`1px solid ${isConf ? C.red+"44" : C.border2}` }}>
                 <div style={{ display:"flex", alignItems:"center", gap:10 }}>
@@ -610,7 +774,7 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
                       {b.forniture?.tipo_utenza} · {b.forniture?.fornitore}
                     </p>
                     <p style={{ color:C.textDim, fontSize:11, margin:"2px 0 0" }}>
-                      {meseFmt(b.periodo_inizio)}–{meseFmt(b.periodo_fine)} {b.periodo_fine ? new Date(b.periodo_fine).getFullYear() : ""} · {n2(b.totale_pagare)} €
+                      {meseFmt(b.periodo_inizio)}-{meseFmt(b.periodo_fine)} {b.periodo_fine ? new Date(b.periodo_fine).getFullYear() : ""} · {n2(b.totale_pagare)} €
                     </p>
                   </div>
                 </div>
@@ -643,6 +807,7 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
     </div>
   );
 }
+
 
 export default function AppShell({ user, dati, onSignOut, onRefresh }) {
   const [tab, setTab] = useState("home");
