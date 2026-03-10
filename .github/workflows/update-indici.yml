@@ -1,0 +1,27 @@
+name: Aggiorna Indici GME
+
+on:
+  schedule:
+    # Ogni giorno alle 09:00 ora italiana (08:00 UTC in estate, 07:00 in inverno)
+    - cron: '0 8 * * *'
+  workflow_dispatch: # consente avvio manuale dal tab Actions
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install aiohttp
+
+      - name: Run update script
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/update_indici.py

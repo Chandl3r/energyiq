@@ -80,7 +80,7 @@ function EmptyState({ onGoUpload }) {
   );
 }
 
-function RingCard({ tipo, label, value, unit, pct, prezzo, color, dimColor, midColor, icon, cardBg }) {
+function RingCard({ tipo, label, value, unit, pct, vsAnno, badge, prezzo, color, dimColor, midColor, icon, cardBg }) {
   const SIZE=74, SW=4.5;
   const r=(SIZE-SW*2)/2, cx=SIZE/2;
   const circ=2*Math.PI*r;
@@ -98,7 +98,16 @@ function RingCard({ tipo, label, value, unit, pct, prezzo, color, dimColor, midC
         <p style={{ color:C.textDim, fontSize:9, margin:"0 0 0px", letterSpacing:2, textTransform:"uppercase", fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{tipo}</p>
         {label && <p style={{ color:color, fontSize:9, margin:"0 0 1px", fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{label}</p>}
         <p style={{ color:C.text, fontSize:23, fontWeight:800, margin:"1px 0 0 -1px", fontFamily:"'Sora',sans-serif", letterSpacing:-1, lineHeight:1, whiteSpace:"nowrap" }}>{value}</p>
-        <p style={{ color:C.textMid, fontSize:10, margin:"1px 0 3px", whiteSpace:"nowrap" }}>{unit}</p>
+        <p style={{ color:C.textMid, fontSize:10, margin:"1px 0 2px", whiteSpace:"nowrap" }}>{unit}</p>
+        {vsAnno && (
+          <p style={{ color:color, fontSize:14, fontWeight:800, margin:"0 0 2px", fontFamily:"'Sora',sans-serif", whiteSpace:"nowrap" }}>{vsAnno}</p>
+        )}
+        {badge && (
+          <div style={{ display:"flex", alignItems:"center", gap:3, marginBottom:2 }}>
+            <svg width="10" height="10" viewBox="0 0 10 10"><polyline points={badge.up ? "1,7 5,3 9,7" : "1,3 5,7 9,3"} fill="none" stroke={C.green} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <span style={{ color:C.green, fontSize:9, fontWeight:700, whiteSpace:"nowrap" }}>{badge.label}</span>
+          </div>
+        )}
         <p style={{ color:C.textDim, fontSize:9, margin:0, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{prezzo}</p>
       </div>
     </div>
@@ -337,14 +346,41 @@ function Dashboard({ user, dati, onGoUpload }) {
           const prezzo    = ultimaB?.dati_estratti?.prezzo_materia_prima;
           const multiLine = isLuce ? forLuce.length > 1 : forGas.length > 1;
           const label     = f && multiLine ? (f.nickname ?? f.fornitore ?? f.pod_pdr) : null;
+
+          // vsAnno: confronto consumo anno corrente vs anno precedente
+          const annoCorr = new Date().getFullYear();
+          const annoPre  = annoCorr - 1;
+          const consCurr = bollF.filter(b => b.periodo_fine && new Date(b.periodo_fine).getFullYear() === annoCorr)
+                               .reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
+          const consPrev = bollF.filter(b => b.periodo_fine && new Date(b.periodo_fine).getFullYear() === annoPre)
+                               .reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
+          const vsAnnoStr = (consCurr > 0 && consPrev > 0)
+            ? (() => {
+                const pctDiff = ((consCurr - consPrev) / consPrev) * 100;
+                const sign    = pctDiff > 0 ? "+" : "";
+                return `${sign}${Math.round(pctDiff)}% vs ${annoPre}`;
+              })()
+            : null;
+
+          // badge "Conveniente" se prezzo < PUN/PSV di mercato
+          const indici     = dati?.indici ?? [];
+          const ultimoInd  = [...indici].filter(i => i.tipo_indice === (isLuce?"PUN":"PSV"))
+                                         .sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
+          const tariffaNum = prezzo ? parseFloat(prezzo) : null;
+          const badge = (tariffaNum && ultimoInd)
+            ? { label: tariffaNum < ultimoInd.valore_medio ? "Conveniente" : "Costoso", up: true }
+            : null;
+
           return (
             <RingCard
               key={f?.id ?? (isLuce ? "empty-luce" : "empty-gas")}
               tipo={isLuce ? "Luce" : "Gas"}
               label={label}
               value={f ? Math.round(totale).toLocaleString("it-IT") : "0"}
-              unit={isLuce ? "kWh totali" : "Smc totali"}
+              unit={isLuce ? "kWh/anno" : "Smc/anno"}
               pct={pct}
+              vsAnno={vsAnnoStr}
+              badge={f && badge}
               prezzo={f
                 ? (prezzo ? `${prezzo} €/${isLuce?"kWh":"Smc"}` : (f.nickname ?? f.fornitore ?? "—"))
                 : "Nessuna bolletta"}
