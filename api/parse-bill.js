@@ -95,7 +95,12 @@ export default async function handler(req, res) {
         ],
       }];
       // Per immagini: openrouter/free con retry automatico
-      models = ["openrouter/free", "openrouter/free", "openrouter/free"];
+      models = [
+        "mistralai/mistral-small-3.1-24b-instruct:free",
+        "openrouter/free",
+        "openrouter/free",
+        "openrouter/free",
+      ];
 
     } else {
       return res.status(400).json({ error: "Campo type obbligatorio: 'text' o 'image'" });

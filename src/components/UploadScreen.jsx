@@ -104,12 +104,23 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         }
         return null;
       };
+      // Normalizza numeri — estrae solo la parte numerica da stringhe come "80.0 Smc" o "145,32 €"
+      const normalizzaNumero = (v) => {
+        if (v === null || v === undefined) return null;
+        if (typeof v === "number") return v;
+        const s = String(v).replace(",", "."); // gestisce virgola decimale italiana
+        const m = s.match(/[\d.]+/);
+        return m ? parseFloat(m[0]) : null;
+      };
       const d = {
         ...datiEstrat,
         data_emissione:        normalizzaData(datiEstrat.data_emissione),
         periodo_inizio:        normalizzaData(datiEstrat.periodo_inizio),
         periodo_fine:          normalizzaData(datiEstrat.periodo_fine),
         data_scadenza_offerta: normalizzaData(datiEstrat.data_scadenza_offerta),
+        consumo_fatturato:     normalizzaNumero(datiEstrat.consumo_fatturato),
+        totale_pagare:         normalizzaNumero(datiEstrat.totale_pagare),
+        prezzo_materia_prima:  normalizzaNumero(datiEstrat.prezzo_materia_prima),
       };
       const podPdr = d.pod_pdr ?? `SCONOSCIUTO-${Date.now()}`;
 
