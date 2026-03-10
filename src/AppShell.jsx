@@ -4,8 +4,10 @@ import UploadScreen from "./components/UploadScreen";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import {
   Zap, Flame, Home, Upload, BarChart2, Settings,
-  CheckCircle, ChevronRight, Bell, RefreshCw, ArrowUpRight, TrendingUp, CloudUpload
+  CheckCircle, ChevronRight, Bell, RefreshCw, ArrowUpRight,
+  TrendingUp, CloudUpload, Trash2, Pencil, X, Check
 } from "lucide-react";
+import { supabase } from "./lib/supabase";
 
 const C = {
   bg:"#080808", surface:"#111111", surface2:"#181818",
@@ -13,8 +15,13 @@ const C = {
   amber:"#f59e0b", amberDim:"#f59e0b20", amberMid:"#f59e0b40",
   sky:"#38bdf8",   skyDim:"#38bdf820",   skyMid:"#38bdf840",
   green:"#22c55e", greenDim:"#22c55e18",
-  red:"#ef4444", text:"#ffffff", textMid:"#9ca3af", textDim:"#4b5563",
+  red:"#ef4444",   redDim:"#ef444415",
+  text:"#ffffff",  textMid:"#9ca3af",    textDim:"#4b5563",
 };
+
+// Benchmark medie famiglie italiane (ISTAT)
+const BENCHMARK_LUCE_MESE = 225;  // kWh/mese (2700/anno)
+const BENCHMARK_GAS_MESE  = 117;  // Smc/mese (1400/anno)
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,13 +35,20 @@ function meseFmt(isoDate) {
 
 function n2(v) { return v != null ? Number(v).toFixed(2) : "—"; }
 
-// Dato un array di bollette filtrate per tipo, costruisce i dati per il grafico
-// ordinati per periodo_fine, massimo ultimi N mesi
+// Calcola percentuale anello rispetto alla media mensile italiana
+function calcPct(bollette, benchmark) {
+  if (!bollette.length) return 2; // arco minimo visibile
+  // media mensile del consumo fatturato
+  const mediaConsumi = bollette.reduce((s,b) => s + Number(b.consumo_fatturato||0), 0) / bollette.length;
+  return Math.min(Math.round((mediaConsumi / benchmark) * 100), 100);
+}
+
 function buildChartData(bollette, valueKey, maxItems = 16) {
-  return bollette
+  return [...bollette]
+    .sort((a,b) => new Date(a.periodo_fine) - new Date(b.periodo_fine))
     .slice(-maxItems)
     .map(b => ({
-      mese:  meseFmt(b.periodo_fine),
+      mese: meseFmt(b.periodo_fine),
       [valueKey]: Number(b.consumo_fatturato) || 0,
     }));
 }
@@ -66,7 +80,7 @@ function EmptyState({ onGoUpload }) {
   );
 }
 
-function RingCard({ tipo, value, unit, pct, vsYear, prezzo, color, dimColor, midColor, icon, cardBg }) {
+function RingCard({ tipo, label, value, unit, pct, prezzo, color, dimColor, midColor, icon, cardBg }) {
   const SIZE=74, SW=4.5;
   const r=(SIZE-SW*2)/2, cx=SIZE/2;
   const circ=2*Math.PI*r;
@@ -81,15 +95,11 @@ function RingCard({ tipo, value, unit, pct, vsYear, prezzo, color, dimColor, mid
         <div style={{ position:"absolute", top:SW*2+1, left:SW*2+1, right:SW*2+1, bottom:SW*2+1, borderRadius:"50%", background:dimColor, display:"flex", alignItems:"center", justifyContent:"center" }}>{icon}</div>
       </div>
       <div style={{ flex:1, minWidth:0 }}>
-        <p style={{ color:C.textDim, fontSize:9, margin:"0 0 0px", letterSpacing:2, textTransform:"uppercase", fontWeight:600, whiteSpace:"nowrap" }}>{tipo}</p>
+        <p style={{ color:C.textDim, fontSize:9, margin:"0 0 0px", letterSpacing:2, textTransform:"uppercase", fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{tipo}</p>
+        {label && <p style={{ color:color, fontSize:9, margin:"0 0 1px", fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{label}</p>}
         <p style={{ color:C.text, fontSize:23, fontWeight:800, margin:"1px 0 0 -1px", fontFamily:"'Sora',sans-serif", letterSpacing:-1, lineHeight:1, whiteSpace:"nowrap" }}>{value}</p>
         <p style={{ color:C.textMid, fontSize:10, margin:"1px 0 3px", whiteSpace:"nowrap" }}>{unit}</p>
-        {vsYear && (
-          <div style={{ display:"flex", alignItems:"baseline", gap:4, marginBottom:2, whiteSpace:"nowrap" }}>
-            <span style={{ color:color, fontSize:14, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>{vsYear}</span>
-          </div>
-        )}
-        <p style={{ color:C.textDim, fontSize:9, margin:0, whiteSpace:"nowrap" }}>{prezzo}</p>
+        <p style={{ color:C.textDim, fontSize:9, margin:0, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{prezzo}</p>
       </div>
     </div>
   );
@@ -98,52 +108,45 @@ function RingCard({ tipo, value, unit, pct, vsYear, prezzo, color, dimColor, mid
 const XAXIS_H = 20;
 const LUCE_H = 148, LUCE_M = { top:52, right:16, left:16, bottom:6 };
 const LUCE_PH = LUCE_H - LUCE_M.top - LUCE_M.bottom - XAXIS_H;
-const GAS_H = 156, GAS_M = { top:52, right:8, left:8, bottom:6 };
-const GAS_PH = GAS_H - GAS_M.top - GAS_M.bottom - XAXIS_H;
 
-function LuceChart({ data }) {
-  const wrapRef = useRef(null);
-  const [active, setActive] = useState(null);
-  const MIN_KWH = Math.min(...data.map(d => d.kwh)) - 30;
-  const MAX_KWH = Math.max(...data.map(d => d.kwh)) + 30;
+function LuceChart({ data, label }) {
+  const wrapRef = useRef();
+  const [activeIdx, setActiveIdx] = useState(null);
+  const MAX_KWH = Math.max(...data.map(d=>d.kwh), 1);
 
-  const getActive = (clientX) => {
+  const getIdx = (clientX) => {
     const rect = wrapRef.current?.getBoundingClientRect();
     if (!rect) return null;
-    const relX  = clientX - rect.left;
     const innerW = rect.width - LUCE_M.left - LUCE_M.right;
-    const n = data.length;
-    const step = innerW / (n - 1);
-    const idx = Math.max(0, Math.min(n-1, Math.round((relX - LUCE_M.left) / step)));
-    const xPx = LUCE_M.left + idx * step;
-    const yPx = LUCE_M.top + LUCE_PH * (1 - (data[idx].kwh - MIN_KWH) / (MAX_KWH - MIN_KWH));
-    return { idx, xPx, yPx, value: data[idx].kwh };
+    const step = innerW / data.length;
+    const x = clientX - rect.left - LUCE_M.left;
+    const idx = Math.floor(x / step);
+    return idx >= 0 && idx < data.length ? idx : null;
   };
 
-  const onMouseMove  = (e) => setActive(getActive(e.clientX));
-  const onMouseLeave = ()  => setActive(null);
-  const onTouchMove  = (e) => { e.preventDefault(); setActive(getActive(e.touches[0].clientX)); };
-  const onTouchEnd   = ()  => setActive(null);
+  const onMouseMove  = (e) => setActiveIdx(getIdx(e.clientX));
+  const onMouseLeave = ()  => setActiveIdx(null);
+  const onTouchMove  = (e) => { e.preventDefault(); setActiveIdx(getIdx(e.touches[0].clientX)); };
+  const onTouchEnd   = ()  => setActiveIdx(null);
 
   const renderOverlay = () => {
-    if (!active) return null;
-    const { xPx, yPx, value } = active;
+    if (activeIdx===null) return null;
     const w = wrapRef.current?.offsetWidth ?? 320;
+    const innerW = w - LUCE_M.left - LUCE_M.right;
+    const step = innerW / data.length;
+    const dotX = LUCE_M.left + activeIdx*step + step/2;
+    const pct = data[activeIdx].kwh / MAX_KWH;
+    const dotY = LUCE_M.top + (LUCE_PH * (1-pct));
     const bW=96, bH=30, bR=15, LIFT=26;
-    const topY = yPx - bH - LIFT;
-    const bX = Math.max(LUCE_M.left, Math.min(w - LUCE_M.right - bW, xPx - bW/2));
-    const aTip = Math.max(bX+bR, Math.min(bX+bW-bR, xPx));
-    const lineBottom = LUCE_M.top + LUCE_PH - 1;
+    const bX = Math.max(LUCE_M.left, Math.min(w-LUCE_M.right-bW, dotX-bW/2));
+    const aTip = Math.max(bX+bR, Math.min(bX+bW-bR, dotX));
+    const bY = dotY - LIFT - bH;
     return (
       <svg style={{ position:"absolute", inset:0, pointerEvents:"none", overflow:"visible" }} width={w} height={LUCE_H}>
-        {(yPx + 6) < lineBottom && (
-          <line x1={xPx} y1={yPx+6} x2={xPx} y2={lineBottom}
-            stroke="#f59e0b" strokeDasharray="3 3" strokeWidth={1.5} strokeLinecap="round" />
-        )}
-        <circle cx={xPx} cy={yPx} r={5.5} fill="white" stroke="#f59e0b" strokeWidth={2.5} />
-        <rect x={bX} y={topY} width={bW} height={bH} rx={bR} ry={bR} fill="#f59e0b" />
-        <polygon points={`${aTip-6},${topY+bH-2} ${aTip+6},${topY+bH-2} ${xPx},${yPx-8}`} fill="#f59e0b" />
-        <text x={bX+bW/2} y={topY+bH/2+5} textAnchor="middle" fill="white" fontWeight="800" fontSize="13" fontFamily="Sora,sans-serif">{value} kWh</text>
+        <circle cx={dotX} cy={dotY} r={5} fill="#f59e0b" />
+        <rect x={bX} y={bY} width={bW} height={bH} rx={bR} ry={bR} fill="#f59e0b" />
+        <polygon points={`${aTip-5},${bY+bH-2} ${aTip+5},${bY+bH-2} ${aTip},${bY+bH+10}`} fill="#f59e0b" />
+        <text x={bX+bW/2} y={bY+bH/2+5} textAnchor="middle" fill="black" fontWeight="800" fontSize="13" fontFamily="Sora,sans-serif">{data[activeIdx].kwh} kWh</text>
       </svg>
     );
   };
@@ -152,7 +155,7 @@ function LuceChart({ data }) {
     <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, overflow:"hidden" }}>
       <div style={{ padding:"16px 18px 4px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
         <div>
-          <p style={{ color:C.amber, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 3px", textTransform:"uppercase" }}>Luce</p>
+          <p style={{ color:C.amber, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 3px", textTransform:"uppercase" }}>⚡ Luce{label ? ` · ${label}` : ""}</p>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:0 }}>Ultimi {data.length} mesi</p>
         </div>
         <span style={{ color:C.textDim, fontSize:11 }}>kWh</span>
@@ -163,16 +166,16 @@ function LuceChart({ data }) {
         <ResponsiveContainer width="100%" height={LUCE_H}>
           <AreaChart data={data} margin={LUCE_M}>
             <defs>
-              <linearGradient id="luceGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.45} />
-                <stop offset="100%" stopColor="#f59e0b" stopOpacity={0} />
+              <linearGradient id={`lgLuce${label||""}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%"  stopColor="#f59e0b" stopOpacity={0.25}/>
+                <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
               </linearGradient>
             </defs>
             <XAxis dataKey="mese" axisLine={false} tickLine={false} height={XAXIS_H}
               tick={{ fill:"#4b5563", fontSize:9 }} interval={0} />
-            <YAxis hide domain={[MIN_KWH, MAX_KWH]} />
-            <Area type="natural" dataKey="kwh" stroke="#f59e0b" strokeWidth={2.5}
-              fill="url(#luceGrad)" dot={false} activeDot={false} isAnimationActive={false} />
+            <YAxis hide domain={[0, MAX_KWH*1.1]} />
+            <Area type="natural" dataKey="kwh" stroke="#f59e0b" strokeWidth={2}
+              fill={`url(#lgLuce${label||""})`} dot={false} isAnimationActive={false} />
           </AreaChart>
         </ResponsiveContainer>
         {renderOverlay()}
@@ -181,18 +184,22 @@ function LuceChart({ data }) {
   );
 }
 
-function GasChart({ data }) {
-  const wrapRef  = useRef(null);
+const GAS_H = 156, GAS_M = { top:52, right:8, left:8, bottom:6 };
+const GAS_PH = GAS_H - GAS_M.top - GAS_M.bottom - XAXIS_H;
+
+function GasChart({ data, label }) {
+  const wrapRef = useRef();
   const [activeIdx, setActiveIdx] = useState(null);
-  const MAX_GAS = Math.max(...data.map(d => d.smc));
+  const MAX_GAS = Math.max(...data.map(d=>d.smc), 1);
 
   const getIdx = (clientX) => {
     const rect = wrapRef.current?.getBoundingClientRect();
     if (!rect) return null;
-    const relX  = clientX - rect.left;
     const innerW = rect.width - GAS_M.left - GAS_M.right;
-    const step   = innerW / data.length;
-    return Math.max(0, Math.min(data.length-1, Math.floor((relX - GAS_M.left) / step)));
+    const step = innerW / data.length;
+    const x = clientX - rect.left - GAS_M.left;
+    const idx = Math.floor(x / step);
+    return idx >= 0 && idx < data.length ? idx : null;
   };
 
   const onMouseMove  = (e) => setActiveIdx(getIdx(e.clientX));
@@ -234,7 +241,7 @@ function GasChart({ data }) {
     <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, overflow:"hidden" }}>
       <div style={{ padding:"16px 18px 4px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
         <div>
-          <p style={{ color:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 3px", textTransform:"uppercase" }}>Gas</p>
+          <p style={{ color:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 3px", textTransform:"uppercase" }}>🔥 Gas{label ? ` · ${label}` : ""}</p>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:0 }}>Ultimi {data.length} mesi</p>
         </div>
         <span style={{ color:C.textDim, fontSize:11 }}>Smc</span>
@@ -266,41 +273,20 @@ function Dashboard({ user, dati, onGoUpload }) {
   }
 
   const { bollette, forniture } = dati;
-
-  // Separa bollette per tipo usando il join
-  const bolletteLuce = bollette.filter(b => b.forniture?.tipo_utenza === "LUCE");
-  const bolletteGas  = bollette.filter(b => b.forniture?.tipo_utenza === "GAS");
-
   const hasDati = bollette.length > 0;
 
-  // Calcola stats
-  const consumoLuce = bolletteLuce.reduce((s, b) => s + Number(b.consumo_fatturato || 0), 0);
-  const consumoGas  = bolletteGas.reduce((s, b) => s + Number(b.consumo_fatturato || 0), 0);
-  const spesaLuce   = bolletteLuce.reduce((s, b) => s + Number(b.totale_pagare || 0), 0);
-  const spesaGas    = bolletteGas.reduce((s, b) => s + Number(b.totale_pagare || 0), 0);
-  const spesaTotale = spesaLuce + spesaGas;
+  // Raggruppa bollette per fornitura
+  const bollettePerFornitura = (fornituraId) =>
+    bollette.filter(b => b.fornitura_id === fornituraId)
+            .sort((a,b) => new Date(a.periodo_fine) - new Date(b.periodo_fine));
 
-  // Ultima tariffa disponibile
-  const ultimaBollettaLuce = bolletteLuce[bolletteLuce.length - 1];
-  const ultimaBollettaGas  = bolletteGas[bolletteGas.length - 1];
-  const prezzoLuce = ultimaBollettaLuce?.dati_estratti?.prezzo_materia_prima;
-  const prezzoGas  = ultimaBollettaGas?.dati_estratti?.prezzo_materia_prima;
+  const spesaTotale = bollette.reduce((s,b) => s + Number(b.totale_pagare||0), 0);
+  const nomeUtente  = user?.user_metadata?.full_name ?? user?.email?.split("@")[0] ?? "Utente";
 
-  // Fornitura info
-  const fornituraLuce = forniture.find(f => f.tipo_utenza === "LUCE");
-  const fornituraGas  = forniture.find(f => f.tipo_utenza === "GAS");
-
-  // Dati grafici
-  const luceChartData = buildChartData(bolletteLuce, "kwh", 15).map(d => ({ mese:d.mese, kwh:d.kwh }));
-  const gasChartData  = buildChartData(bolletteGas,  "smc", 16).map(d => ({ mese:d.mese, smc:d.smc }));
-
-  // Ultime bollette (max 5, più recenti)
+  // Ultime bollette
   const ultimeBollette = [...bollette]
-    .sort((a,b) => new Date(b.data_emissione) - new Date(a.data_emissione))
+    .sort((a,b) => new Date(b.data_emissione||b.periodo_fine) - new Date(a.data_emissione||a.periodo_fine))
     .slice(0, 5);
-
-  // Nome utente
-  const nomeUtente = user?.user_metadata?.full_name ?? user?.email?.split("@")[0] ?? "Utente";
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:14, paddingBottom:8 }}>
@@ -335,56 +321,77 @@ function Dashboard({ user, dati, onGoUpload }) {
         </div>
       </div>
 
-      {/* Empty state */}
       {!hasDati && <EmptyState onGoUpload={onGoUpload} />}
 
-      {/* Ring cards */}
-      {hasDati && (
-        <div style={{ display:"flex", gap:10 }}>
-          <RingCard
-            tipo="Luce" value={Math.round(consumoLuce).toLocaleString("it-IT")} unit="kWh totali"
-            pct={75} prezzo={prezzoLuce ? `${prezzoLuce} €/kWh` : fornituraLuce?.fornitore ?? "—"}
-            color={C.amber} dimColor={C.amberDim} midColor={C.amberMid}
-            icon={<Zap size={18} color={C.amber} />} cardBg={`linear-gradient(135deg,#1a0f00,${C.surface})`}
-          />
-          <RingCard
-            tipo="Gas" value={Math.round(consumoGas).toLocaleString("it-IT")} unit="Smc totali"
-            pct={54} prezzo={prezzoGas ? `${prezzoGas} €/Smc` : fornituraGas?.fornitore ?? "—"}
-            color={C.sky} dimColor={C.skyDim} midColor={C.skyMid}
-            icon={<Flame size={18} color={C.sky} />} cardBg={`linear-gradient(135deg,#001824,${C.surface})`}
-          />
+      {/* Ring cards — una per fornitura */}
+      {hasDati && forniture.length > 0 && (
+        <div style={{ display:"flex", gap:10, flexWrap: forniture.length > 2 ? "wrap" : "nowrap" }}>
+          {forniture.map(f => {
+            const isLuce  = f.tipo_utenza === "LUCE";
+            const bollF   = bollettePerFornitura(f.id);
+            const benchmark = isLuce ? BENCHMARK_LUCE_MESE : BENCHMARK_GAS_MESE;
+            const pct     = calcPct(bollF, benchmark);
+            const totale  = bollF.reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
+            const ultimaB = bollF[bollF.length-1];
+            const prezzo  = ultimaB?.dati_estratti?.prezzo_materia_prima;
+            const label   = f.nickname ?? f.fornitore ?? f.pod_pdr;
+            return (
+              <RingCard
+                key={f.id}
+                tipo={isLuce ? "Luce" : "Gas"}
+                label={forniture.filter(x=>x.tipo_utenza===f.tipo_utenza).length > 1 ? label : null}
+                value={Math.round(totale).toLocaleString("it-IT")}
+                unit={isLuce ? "kWh totali" : "Smc totali"}
+                pct={pct}
+                prezzo={prezzo ? `${prezzo} €/${isLuce?"kWh":"Smc"}` : label}
+                color={isLuce ? C.amber : C.sky}
+                dimColor={isLuce ? C.amberDim : C.skyDim}
+                midColor={isLuce ? C.amberMid : C.skyMid}
+                icon={isLuce ? <Zap size={18} color={C.amber}/> : <Flame size={18} color={C.sky}/>}
+                cardBg={isLuce ? `linear-gradient(135deg,#1a0f00,${C.surface})` : `linear-gradient(135deg,#001824,${C.surface})`}
+              />
+            );
+          })}
         </div>
       )}
 
-      {/* Grafici luce */}
-      {luceChartData.length >= 2 && <LuceChart data={luceChartData} />}
-      {luceChartData.length === 1 && (
-        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20 }}>
-          <p style={{ color:C.amber, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 6px", textTransform:"uppercase" }}>Luce</p>
-          <p style={{ color:C.textDim, fontSize:12, margin:0 }}>Carica almeno 2 bollette luce per vedere il grafico</p>
-        </div>
-      )}
+      {/* Grafici — uno per fornitura con ≥2 bollette */}
+      {hasDati && forniture.map(f => {
+        const isLuce = f.tipo_utenza === "LUCE";
+        const bollF  = bollettePerFornitura(f.id);
+        const showLabel = forniture.filter(x=>x.tipo_utenza===f.tipo_utenza).length > 1;
+        const label  = showLabel ? (f.nickname ?? f.fornitore) : null;
 
-      {/* Grafici gas */}
-      {gasChartData.length >= 2 && <GasChart data={gasChartData} />}
-      {gasChartData.length === 1 && (
-        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20 }}>
-          <p style={{ color:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 6px", textTransform:"uppercase" }}>Gas</p>
-          <p style={{ color:C.textDim, fontSize:12, margin:0 }}>Carica almeno 2 bollette gas per vedere il grafico</p>
-        </div>
-      )}
+        if (bollF.length >= 2) {
+          const chartData = buildChartData(bollF, isLuce ? "kwh" : "smc");
+          return isLuce
+            ? <LuceChart key={f.id} data={chartData} label={label} />
+            : <GasChart  key={f.id} data={chartData} label={label} />;
+        }
+        if (bollF.length === 1) {
+          return (
+            <div key={f.id} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20 }}>
+              <p style={{ color:isLuce?C.amber:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 6px", textTransform:"uppercase" }}>
+                {isLuce?"⚡ Luce":"🔥 Gas"}{label?` · ${label}`:""}
+              </p>
+              <p style={{ color:C.textDim, fontSize:12, margin:0 }}>
+                Carica almeno 2 bollette per vedere il grafico
+              </p>
+            </div>
+          );
+        }
+        return null;
+      })}
 
       {/* Ultime bollette */}
       {ultimeBollette.length > 0 && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-            <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:0 }}>Ultime bollette</p>
-          </div>
+          <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:"0 0 14px" }}>Ultime bollette</p>
           {ultimeBollette.map((b, i) => {
             const isLuce = b.forniture?.tipo_utenza === "LUCE";
-            const color = isLuce ? C.amber : C.sky;
-            const dim   = isLuce ? C.amberDim : C.skyDim;
-            const icon  = isLuce ? <Zap size={14} color={color}/> : <Flame size={14} color={color}/>;
+            const color  = isLuce ? C.amber : C.sky;
+            const dim    = isLuce ? C.amberDim : C.skyDim;
+            const icon   = isLuce ? <Zap size={14} color={color}/> : <Flame size={14} color={color}/>;
             return (
               <div key={b.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:C.surface2, borderRadius:14, padding:"13px 14px", marginBottom:i<ultimeBollette.length-1?10:0, border:`1px solid ${C.border2}` }}>
                 <div style={{ display:"flex", alignItems:"center", gap:12 }}>
@@ -394,7 +401,7 @@ function Dashboard({ user, dati, onGoUpload }) {
                       {b.forniture?.tipo_utenza} · {b.forniture?.fornitore}
                     </p>
                     <p style={{ color:C.textDim, fontSize:11, margin:"2px 0 0" }}>
-                      {meseFmt(b.periodo_inizio)} – {meseFmt(b.periodo_fine)} {new Date(b.periodo_fine).getFullYear()}
+                      {meseFmt(b.periodo_inizio)} – {meseFmt(b.periodo_fine)} {b.periodo_fine ? new Date(b.periodo_fine).getFullYear() : ""}
                     </p>
                   </div>
                 </div>
@@ -417,8 +424,6 @@ function Dashboard({ user, dati, onGoUpload }) {
 
 function MercatoScreen({ dati }) {
   const { indici = [] } = dati ?? {};
-
-  // Ultimo PUN e PSV disponibili
   const pun = [...indici].filter(i => i.tipo_indice === "PUN").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
   const psv = [...indici].filter(i => i.tipo_indice === "PSV").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
 
@@ -465,10 +470,35 @@ function MercatoScreen({ dati }) {
   );
 }
 
-function SettingsScreen({ user, dati, onSignOut }) {
-  const { forniture = [] } = dati ?? {};
+function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
+  const { forniture = [], bollette = [] } = dati ?? {};
   const nomeUtente = user?.user_metadata?.full_name ?? user?.email?.split("@")[0] ?? "Utente";
   const email = user?.email ?? "";
+
+  const [deletingId, setDeletingId]   = useState(null);
+  const [editingId,  setEditingId]    = useState(null);
+  const [editValue,  setEditValue]    = useState("");
+  const [loading,    setLoading]      = useState(false);
+
+  // Bollette ordinate più recenti prima
+  const tuttiOrdinate = [...bollette]
+    .sort((a,b) => new Date(b.data_emissione||b.periodo_fine) - new Date(a.data_emissione||a.periodo_fine));
+
+  const eliminaBolletta = async (id) => {
+    setLoading(true);
+    await supabase.from("bollette").delete().eq("id", id);
+    setDeletingId(null);
+    setLoading(false);
+    onRefresh?.();
+  };
+
+  const salvaNickname = async (fornituraId) => {
+    setLoading(true);
+    await supabase.from("forniture").update({ nickname: editValue || null }).eq("id", fornituraId);
+    setEditingId(null);
+    setLoading(false);
+    onRefresh?.();
+  };
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16, paddingBottom:8 }}>
@@ -476,6 +506,8 @@ function SettingsScreen({ user, dati, onSignOut }) {
         <p style={{ color:C.textDim, fontSize:12, margin:"0 0 4px", letterSpacing:2, textTransform:"uppercase" }}>Profilo</p>
         <h2 style={{ color:C.text, fontSize:24, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>Impostazioni</h2>
       </div>
+
+      {/* Avatar */}
       <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20, display:"flex", alignItems:"center", gap:16 }}>
         <div style={{ width:56, height:56, borderRadius:"50%", background:`linear-gradient(135deg,${C.amber},#ef4444)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:20, fontWeight:800, color:"#fff", flexShrink:0 }}>
           {nomeUtente.slice(0,2).toUpperCase()}
@@ -487,26 +519,102 @@ function SettingsScreen({ user, dati, onSignOut }) {
         </div>
       </div>
 
+      {/* Forniture con nickname */}
       {forniture.length > 0 && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:"0 0 14px" }}>Le tue forniture</p>
           {forniture.map((f, i) => {
             const isLuce = f.tipo_utenza === "LUCE";
-            const color = isLuce ? C.amber : C.sky;
-            const dim   = isLuce ? C.amberDim : C.skyDim;
-            const icon  = isLuce ? <Zap size={14} color={color}/> : <Flame size={14} color={color}/>;
+            const color  = isLuce ? C.amber : C.sky;
+            const dim    = isLuce ? C.amberDim : C.skyDim;
+            const icon   = isLuce ? <Zap size={14} color={color}/> : <Flame size={14} color={color}/>;
+            const isEditing = editingId === f.id;
             return (
               <div key={f.id} style={{ background:C.surface2, borderRadius:14, padding:14, border:`1px solid ${C.border2}`, marginBottom:i<forniture.length-1?10:0 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-                  <div style={{ background:dim, borderRadius:8, padding:7 }}>{icon}</div>
-                  <span style={{ color:color, fontSize:12, fontWeight:700, letterSpacing:1, textTransform:"uppercase" }}>{f.tipo_utenza}</span>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <div style={{ background:dim, borderRadius:8, padding:7 }}>{icon}</div>
+                    <div>
+                      <span style={{ color:color, fontSize:12, fontWeight:700, letterSpacing:1, textTransform:"uppercase" }}>{f.tipo_utenza}</span>
+                      {f.nickname && <p style={{ color:C.textMid, fontSize:11, margin:"2px 0 0" }}>{f.nickname}</p>}
+                    </div>
+                  </div>
+                  <button onClick={() => { setEditingId(f.id); setEditValue(f.nickname||""); }}
+                    style={{ background:"none", border:"none", cursor:"pointer", padding:6 }}>
+                    <Pencil size={14} color={C.textDim} />
+                  </button>
                 </div>
+                {/* Editor nickname */}
+                {isEditing && (
+                  <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+                    <input
+                      value={editValue}
+                      onChange={e => setEditValue(e.target.value)}
+                      placeholder="es. Casa Milano"
+                      style={{ flex:1, background:C.bg, border:`1px solid ${C.border2}`, borderRadius:10, padding:"8px 12px", color:C.text, fontSize:13, outline:"none" }}
+                    />
+                    <button onClick={() => salvaNickname(f.id)} disabled={loading}
+                      style={{ background:C.green, border:"none", borderRadius:10, padding:"8px 12px", cursor:"pointer" }}>
+                      <Check size={14} color="#fff" />
+                    </button>
+                    <button onClick={() => setEditingId(null)}
+                      style={{ background:C.surface, border:`1px solid ${C.border2}`, borderRadius:10, padding:"8px 12px", cursor:"pointer" }}>
+                      <X size={14} color={C.textDim} />
+                    </button>
+                  </div>
+                )}
                 {[["Codice", f.pod_pdr], ["Fornitore", f.fornitore], ["Offerta", f.nome_offerta], ["Scadenza", f.data_scadenza_offerta]].filter(([,v]) => v).map(([k,v]) => (
                   <div key={k} style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
                     <span style={{ color:C.textDim, fontSize:12 }}>{k}</span>
                     <span style={{ color:C.text, fontSize:12, fontWeight:600, fontFamily:k==="Codice"?"monospace":"inherit" }}>{v}</span>
                   </div>
                 ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Lista bollette con elimina */}
+      {tuttiOrdinate.length > 0 && (
+        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
+          <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:"0 0 14px" }}>Bollette salvate</p>
+          {tuttiOrdinate.map((b, i) => {
+            const isLuce  = b.forniture?.tipo_utenza === "LUCE";
+            const color   = isLuce ? C.amber : C.sky;
+            const dim     = isLuce ? C.amberDim : C.skyDim;
+            const icon    = isLuce ? <Zap size={13} color={color}/> : <Flame size={13} color={color}/>;
+            const isConf  = deletingId === b.id;
+            return (
+              <div key={b.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:C.surface2, borderRadius:14, padding:"12px 14px", marginBottom:i<tuttiOrdinate.length-1?8:0, border:`1px solid ${isConf ? C.red+"44" : C.border2}` }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ background:dim, borderRadius:8, padding:7 }}>{icon}</div>
+                  <div>
+                    <p style={{ color:C.text, fontSize:12, fontWeight:600, margin:0 }}>
+                      {b.forniture?.tipo_utenza} · {b.forniture?.fornitore}
+                    </p>
+                    <p style={{ color:C.textDim, fontSize:11, margin:"2px 0 0" }}>
+                      {meseFmt(b.periodo_inizio)}–{meseFmt(b.periodo_fine)} {b.periodo_fine ? new Date(b.periodo_fine).getFullYear() : ""} · {n2(b.totale_pagare)} €
+                    </p>
+                  </div>
+                </div>
+                {isConf ? (
+                  <div style={{ display:"flex", gap:6 }}>
+                    <button onClick={() => eliminaBolletta(b.id)} disabled={loading}
+                      style={{ background:C.red, border:"none", borderRadius:8, padding:"6px 10px", cursor:"pointer", fontSize:11, color:"#fff", fontWeight:700 }}>
+                      Elimina
+                    </button>
+                    <button onClick={() => setDeletingId(null)}
+                      style={{ background:C.surface, border:`1px solid ${C.border2}`, borderRadius:8, padding:"6px 10px", cursor:"pointer" }}>
+                      <X size={12} color={C.textDim} />
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={() => setDeletingId(b.id)}
+                    style={{ background:"none", border:"none", cursor:"pointer", padding:6 }}>
+                    <Trash2 size={15} color={C.textDim} />
+                  </button>
+                )}
               </div>
             );
           })}
@@ -557,7 +665,7 @@ export default function AppShell({ user, dati, onSignOut, onRefresh }) {
           {tab==="home"     && <Dashboard user={user} dati={dati} onGoUpload={() => setTab("upload")} />}
           {tab==="upload"   && <UploadScreen user={user} onBollettaSaved={() => { onRefresh(); setTab("home"); }} />}
           {tab==="mercato"  && <MercatoScreen dati={dati} />}
-          {tab==="settings" && <SettingsScreen user={user} dati={dati} onSignOut={onSignOut} />}
+          {tab==="settings" && <SettingsScreen user={user} dati={dati} onSignOut={onSignOut} onRefresh={onRefresh} />}
         </div>
         <div style={{ position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, background:`${C.surface}ee`, backdropFilter:"blur(20px)", borderTop:`1px solid ${C.border}`, padding:"8px 8px 20px", display:"flex", justifyContent:"space-around", zIndex:100 }}>
           {nav.map(({ id, icon:Icon, label }) => {
