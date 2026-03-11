@@ -104,7 +104,7 @@ function RingCard({ tipo, label, value, unit, pct, vsAnno, badge, prezzo, color,
         )}
         {badge && (
           <div style={{ display:"flex", alignItems:"center", gap:3, marginBottom:2 }}>
-            <svg width="10" height="10" viewBox="0 0 10 10"><polyline points={badge.conveniente ? "1,7 5,3 9,7" : "1,3 5,7 9,3"} fill="none" stroke={badge.conveniente ? C.green : C.red} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <svg width="10" height="10" viewBox="0 0 10 10"><polyline points={badge.conveniente ? "1,3 5,7 9,3" : "1,7 5,3 9,7"} fill="none" stroke={badge.conveniente ? C.green : C.red} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
             <span style={{ color:badge.conveniente ? C.green : C.red, fontSize:9, fontWeight:700, whiteSpace:"nowrap" }}>{badge.label}</span>
           </div>
         )}
@@ -361,10 +361,10 @@ function Dashboard({ user, dati, onGoUpload }) {
               return (
                 <span style={{ display:"flex", alignItems:"center", gap:4 }}>
                   <svg width="12" height="12" viewBox="0 0 12 12">
-                    <polyline points={risparmia ? "1,8 6,3 11,8" : "1,4 6,9 11,4"}
+                    <polyline points={risparmia ? "1,4 6,9 11,4" : "1,8 6,3 11,8"}
                       fill="none" stroke={colore} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
-                  <span style={{ color:colore, fontSize:14, fontWeight:700, fontFamily:"'Sora',sans-serif" }}>
+                  <span style={{ color:colore, fontSize:9, fontWeight:700, fontFamily:"'Sora',sans-serif" }}>
                     {risparmia ? `risparmi ~${val.toLocaleString("it-IT")}€/${periodoLabel}` : `spendi ~${val.toLocaleString("it-IT")}€/${periodoLabel} in più`}
                   </span>
                 </span>
