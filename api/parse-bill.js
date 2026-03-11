@@ -23,6 +23,9 @@ Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun back
   "prezzo_materia_prima": numero es 0.12636 o null,
   "tipo_prezzo": "FISSO" oppure "VARIABILE",
   "data_scadenza_offerta": "YYYY-MM-DD o null",
+  "storico_mensile": [
+    {"mese": "YYYY-MM", "consumo": numero}
+  ],
   "note": "info rilevanti o null"
 }
 
@@ -42,7 +45,12 @@ Regole OBBLIGATORIE — leggile con attenzione:
    - NON usare il "Prezzo medio" dello Scontrino dell'Energia (quello include rete e oneri di sistema, non è il prezzo della materia prima).
    - Se il prezzo è variabile (indicizzato PUN/PSV), usa il valore del mese corrente della bolletta.
 
-6. Se un campo non è presente usa null.`;
+6. storico_mensile: cerca nella bolletta grafici, tabelle o sezioni intitolate "Storico consumi", "Consumi storici", "Andamento consumi", "Ultimi mesi", "Dati storici" o simili. Estrai TUTTI i mesi visibili come array. Ogni elemento deve avere:
+   - "mese": formato YYYY-MM (es. "2024-10"). Converti etichette italiane come "Ott 24" → "2024-10", "Gen 2025" → "2025-01".
+   - "consumo": numero intero (kWh per luce, Smc per gas). Usa il consumo mensile effettivo, NON cumulativo.
+   Se non ci sono dati storici, usa [].
+
+7. Se un campo non è presente usa null.`;
 
 // Modelli TESTO — stabili, confermati nella lista free
 const TEXT_MODELS = [

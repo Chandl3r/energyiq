@@ -43,14 +43,57 @@ function calcPct(bollette, benchmark) {
   return Math.min(Math.round((mediaConsumi / benchmark) * 100), 100);
 }
 
-function buildChartData(bollette, valueKey, maxItems = 16) {
-  return [...bollette]
-    .sort((a,b) => new Date(a.periodo_fine) - new Date(b.periodo_fine))
+// Costruisce i dati grafico dai consumi mensili storici estratti dal PDF.
+// Funziona dalla prima bolletta in poi (usa storico_mensile del PDF).
+// Fallback automatico su consumo_fatturato spalmato sui mesi del periodo.
+function buildChartDataFromStorico(bollette, tipo) {
+  const maxItems = tipo === "LUCE" ? 15 : 16;
+  const valueKey = tipo === "LUCE" ? "kwh" : "smc";
+  const mesMap   = new Map(); // "YYYY-MM" → consumo mensile
+
+  // Ordina bollette dalla più vecchia alla più recente
+  // (la più recente sovrascrive per i mesi in sovrapposizione)
+  const sorted = [...bollette].sort((a,b) =>
+    new Date(a.periodo_fine||0) - new Date(b.periodo_fine||0)
+  );
+
+  sorted.forEach(b => {
+    // ── 1. Storico mensile dal PDF (fonte primaria) ──────────────────────────
+    const storico = b.dati_estratti?.storico_mensile ?? [];
+    storico.forEach(s => {
+      if (s.mese && s.consumo != null && Number(s.consumo) > 0) {
+        mesMap.set(s.mese, Math.round(Number(s.consumo)));
+      }
+    });
+
+    // ── 2. Fallback: consumo_fatturato spalmato sui mesi del periodo ─────────
+    if (b.periodo_fine && b.consumo_fatturato) {
+      const dFine   = new Date(b.periodo_fine);
+      const dInizio = b.periodo_inizio ? new Date(b.periodo_inizio) : dFine;
+      const mesiPeriodo = [];
+      let cur = new Date(dInizio.getFullYear(), dInizio.getMonth(), 1);
+      const endM = new Date(dFine.getFullYear(), dFine.getMonth(), 1);
+      while (cur <= endM) {
+        mesiPeriodo.push(
+          `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,"0")}`
+        );
+        cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
+      }
+      const consumoMensile = Math.round(
+        Number(b.consumo_fatturato) / Math.max(mesiPeriodo.length, 1)
+      );
+      mesiPeriodo.forEach(key => {
+        if (!mesMap.has(key) && consumoMensile > 0)
+          mesMap.set(key, consumoMensile);
+      });
+    }
+  });
+
+  return [...mesMap.entries()]
+    .filter(([,v]) => v > 0)
+    .sort((a,b) => a[0].localeCompare(b[0]))
     .slice(-maxItems)
-    .map(b => ({
-      mese: meseFmt(b.periodo_fine),
-      [valueKey]: Number(b.consumo_fatturato) || 0,
-    }));
+    .map(([mese, val]) => ({ mese: meseFmt(mese + "-01"), [valueKey]: val }));
 }
 
 // ─── Components ───────────────────────────────────────────────────────────────
@@ -99,9 +142,16 @@ function RingCard({ tipo, label, value, unit, pct, vsAnno, badge, prezzo, color,
         {label && <p style={{ color:color, fontSize:9, margin:"0 0 1px", fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{label}</p>}
         <p style={{ color:C.text, fontSize:23, fontWeight:800, margin:"1px 0 0 -1px", fontFamily:"'Sora',sans-serif", letterSpacing:-1, lineHeight:1, whiteSpace:"nowrap" }}>{value}</p>
         <p style={{ color:C.textMid, fontSize:10, margin:"1px 0 2px", whiteSpace:"nowrap" }}>{unit}</p>
-        {vsAnno && (
-          <p style={{ color:color, fontSize:14, fontWeight:800, margin:"0 0 2px", fontFamily:"'Sora',sans-serif", whiteSpace:"nowrap" }}>{vsAnno}</p>
-        )}
+        {vsAnno && (() => {
+          const [pct, ...rest] = vsAnno.split(" vs ");
+          const anno = rest.join(" vs ");
+          return (
+            <p style={{ margin:"0 0 2px", whiteSpace:"nowrap" }}>
+              <span style={{ color:color, fontSize:14, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>{pct}</span>
+              {anno && <span style={{ color:C.textMid, fontSize:10, fontWeight:400, marginLeft:4 }}>vs {anno}</span>}
+            </p>
+          );
+        })()}
         {badge && (
           <div style={{ display:"flex", alignItems:"center", gap:3, marginBottom:2 }}>
             <svg width="10" height="10" viewBox="0 0 10 10"><polyline points={badge.conveniente ? "1,3 5,7 9,3" : "1,7 5,3 9,7"} fill="none" stroke={badge.conveniente ? C.green : C.red} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -459,36 +509,25 @@ function Dashboard({ user, dati, onGoUpload }) {
         const bollF     = bollettePerFornitura(f.id);
         const multiLine = forniture.filter(x => x.tipo_utenza === f.tipo_utenza).length > 1;
         const label     = multiLine ? (f.nickname ?? f.fornitore) : null;
-        if (bollF.length >= 2) {
-          const chartData = buildChartData(bollF, isLuce ? "kwh" : "smc");
-          return isLuce
-            ? <LuceChart key={f.id} data={chartData} label={label} />
-            : <GasChart  key={f.id} data={chartData} label={label} />;
-        }
-        return (
-          <div key={f.id} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20 }}>
-            <p style={{ color:isLuce?C.amber:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 6px", textTransform:"uppercase" }}>
-              {isLuce ? "⚡ Luce" : "🔥 Gas"}{label ? ` · ${label}` : ""}
-            </p>
-            <p style={{ color:C.textDim, fontSize:12, margin:0 }}>
-              {bollF.length === 0 ? "Carica le prime bollette per vedere il grafico" : "Carica almeno 2 bollette per vedere il grafico"}
-            </p>
-          </div>
-        );
-      })}
 
-      {forniture.filter(f => f.tipo_utenza === "LUCE").length === 0 && (
-        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20 }}>
-          <p style={{ color:C.amber, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 6px", textTransform:"uppercase" }}>⚡ Luce</p>
-          <p style={{ color:C.textDim, fontSize:12, margin:0 }}>Carica le prime bollette per vedere il grafico</p>
-        </div>
-      )}
-      {forniture.filter(f => f.tipo_utenza === "GAS").length === 0 && (
-        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20 }}>
-          <p style={{ color:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 6px", textTransform:"uppercase" }}>🔥 Gas</p>
-          <p style={{ color:C.textDim, fontSize:12, margin:0 }}>Carica le prime bollette per vedere il grafico</p>
-        </div>
-      )}
+        if (bollF.length === 0) {
+          return (
+            <div key={f.id} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20 }}>
+              <p style={{ color:isLuce?C.amber:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 6px", textTransform:"uppercase" }}>
+                {isLuce ? "⚡ Luce" : "🔥 Gas"}{label ? ` · ${label}` : ""}
+              </p>
+              <p style={{ color:C.textDim, fontSize:12, margin:0 }}>
+                Carica la prima bolletta per vedere il grafico
+              </p>
+            </div>
+          );
+        }
+
+        const chartData = buildChartDataFromStorico(bollF, f.tipo_utenza);
+        return isLuce
+          ? <LuceChart key={f.id} data={chartData} label={label} />
+          : <GasChart  key={f.id} data={chartData} label={label} />;
+      })}
 
 
       {/* Ultime bollette */}
