@@ -1,7 +1,9 @@
 // api/parse-bill.js
-// PDF  → riceve testo estratto dal browser → modelli testo stabili
-// Immagine → riceve base64 → openrouter/free (con retry)
+// Primario:  Groq  (gratuito, 14.400 req/giorno, nessuna carta)
+// Fallback:  OpenRouter free models
+// Post-processing: regex deterministico per prezzo_materia_prima (non dipende dall'LLM)
 
+const GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
@@ -29,59 +31,93 @@ Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun back
   "note": "info rilevanti o null"
 }
 
-Regole OBBLIGATORIE — leggile con attenzione:
+Regole OBBLIGATORIE:
 
 1. tipo_utenza: elettricità/luce = LUCE, gas = GAS
 
 2. pod_pdr: per luce il codice POD inizia con "IT" (es. IT012E00367605), per gas il PDR è numerico (es. 05260200451415). OBBLIGATORIO.
 
-3. consumo_fatturato: il consumo del PERIODO di questa bolletta (es. "Consumo totale fatturato del periodo" o "Consumo totale fatturato"). NON usare il consumo annuo qui.
+3. consumo_fatturato: il consumo del PERIODO di questa bolletta (es. "Consumo totale fatturato del periodo"). NON usare il consumo annuo qui.
 
-4. consumo_annuo: il consumo annuale indicato nella sezione "CONSUMO ANNUO" o "Informazioni storiche" o "Consumo Annuo" (es. 5268 kWh oppure 817 Smc). Questo valore si riferisce agli ultimi 12 mesi, non al periodo della bolletta.
+4. consumo_annuo: il consumo annuale dalla sezione "CONSUMO ANNUO" (es. 5268 kWh oppure 817 Smc).
 
-5. prezzo_materia_prima: ATTENZIONE — devi prendere il prezzo DAL BOX DELL'OFFERTA, non dallo Scontrino dell'Energia.
-   - Per luce: cerca "Prezzo Fisso" nel "Box dell'Offerta" o "spesa per la vendita di energia elettrica". Es: "Prezzo Fisso(Dic.25)=0,12636 €/kWh" → estrai 0.12636
-   - Per gas: cerca "Prezzo Fisso" nel "Box dell'Offerta" o "spesa per la vendita di gas naturale". Es: "Prezzo Fisso(Gen.26)=0,513393 €/Smc" → estrai 0.513393
-   - NON usare il "Prezzo medio" dello Scontrino dell'Energia (quello include rete e oneri di sistema, non è il prezzo della materia prima).
-   - Se il prezzo è variabile (indicizzato PUN/PSV), usa il valore del mese corrente della bolletta.
+5. prezzo_materia_prima: prendi il prezzo DAL BOX DELL'OFFERTA, NON dallo Scontrino dell'Energia.
+   - Cerca pattern come "Prezzo Fisso(Dic.25)=0,12636 euro/kWh" - estrai 0.12636
+   - Cerca pattern come "Prezzo Fisso(Gen.26)=0,513393 euro/Smc" - estrai 0.513393
+   - NON usare il "Prezzo medio" dello Scontrino (include rete e oneri, non e materia prima).
 
-6. storico_mensile: cerca nella bolletta grafici, tabelle o sezioni intitolate "Storico consumi", "Consumi storici", "Andamento consumi", "Ultimi mesi", "Dati storici" o simili. Estrai TUTTI i mesi visibili come array. Ogni elemento deve avere:
-   - "mese": formato YYYY-MM (es. "2024-10"). Converti etichette italiane come "Ott 24" → "2024-10", "Gen 2025" → "2025-01".
-   - "consumo": numero intero (kWh per luce, Smc per gas). Usa il consumo mensile effettivo, NON cumulativo.
-   Se non ci sono dati storici, usa [].
+6. storico_mensile: estrai TUTTI i mesi da grafici/tabelle storiche. Formato:
+   - "mese": YYYY-MM (converti "Ott 24" in "2024-10")
+   - "consumo": numero mensile effettivo, NON cumulativo
+   Se assente, usa [].
 
-7. Se un campo non è presente usa null.`;
+7. Se un campo non e presente usa null.`;
 
-// Modelli TESTO — senza suffisso :free, usa i crediti (~$0.0004 a bolletta = 1000 anni con $5)
-const TEXT_MODELS = [
-  "meta-llama/llama-3.3-70b-instruct",
-  "google/gemma-3-27b-it",
-  "mistralai/mistral-small-3.1-24b-instruct",
-  "google/gemma-3-12b-it",
+// Regex deterministico per prezzo materia prima (post-processing, sovrascrive LLM)
+function extractPrezzoRegex(testo) {
+  const patterns = [
+    /Prezzo\s+Fisso\s*(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*[€euro]*\s*\/\s*(?:kWh|Smc)/i,
+    /Prezzo\s+Energia\s*(?:Fisso\s*)?(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*[€euro]*\s*\/\s*(?:kWh|Smc)/i,
+    /=\s*(0[,.][\d]{4,6})\s*[€]\s*\/\s*kWh/,
+    /=\s*(0[,.][\d]{4,6})\s*[€]\s*\/\s*Smc/,
+  ];
+  for (const re of patterns) {
+    const m = testo.match(re);
+    if (m) {
+      const val = parseFloat(m[1].replace(",", "."));
+      if (val > 0.01 && val < 5) return val;
+    }
+  }
+  return null;
+}
+
+async function callGroq(messages, apiKey) {
+  const res = await fetch(GROQ_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages, temperature: 0.1, max_tokens: 1500 }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data?.error?.message ?? JSON.stringify(data);
+    console.error(`[Groq] HTTP ${res.status}: ${msg}`);
+    throw new Error(`Groq HTTP ${res.status}: ${msg}`);
+  }
+  console.log("[Groq] OK");
+  return data.choices?.[0]?.message?.content ?? "";
+}
+
+const OR_FALLBACK_MODELS = [
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemma-3-27b-it:free",
+  "mistralai/mistral-small-3.1-24b-instruct:free",
 ];
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-async function callModel(model, messages, apiKey) {
+async function callOpenRouter(model, messages, apiKey) {
   const res = await fetch(OPENROUTER_URL, {
     method: "POST",
     headers: {
-      "Content-Type":  "application/json",
+      "Content-Type": "application/json",
       "Authorization": `Bearer ${apiKey}`,
-      "HTTP-Referer":  "https://energyiq-omega.vercel.app",
-      "X-Title":       "EnergyIQ",
+      "HTTP-Referer": "https://energyiq-omega.vercel.app",
+      "X-Title": "EnergyIQ",
     },
-    body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 1024 }),
+    body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 1500 }),
   });
   const data = await res.json();
-  // Log completo per debug
   if (!res.ok) {
-    const errMsg = data?.error?.message ?? data?.error ?? JSON.stringify(data);
-    console.error(`[callModel] ${model} → HTTP ${res.status}: ${errMsg}`);
-    throw new Error(`${model}: HTTP ${res.status} — ${errMsg}`);
+    const msg = data?.error?.message ?? JSON.stringify(data);
+    console.error(`[OR] ${model} HTTP ${res.status}: ${msg}`);
+    throw new Error(`${model}: HTTP ${res.status} — ${msg}`);
   }
-  console.log(`[callModel] ${model} → OK`);
+  console.log(`[OR] ${model} OK`);
   return data.choices?.[0]?.message?.content ?? "";
+}
+
+function parseJson(raw) {
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("Nessun JSON nella risposta");
+  return JSON.parse(m[0]);
 }
 
 export default async function handler(req, res) {
@@ -91,92 +127,77 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST")    return res.status(405).json({ error: "Method not allowed" });
 
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: "OPENROUTER_API_KEY non configurata" });
+  const groqKey = process.env.GROQ_API_KEY;
+  const orKey   = process.env.OPENROUTER_API_KEY;
+
+  if (!groqKey && !orKey)
+    return res.status(500).json({ error: "Nessuna API key configurata" });
 
   try {
     const body = await new Promise((resolve, reject) => {
       let raw = "";
-      req.on("data", chunk => raw += chunk);
-      req.on("end",  () => { try { resolve(JSON.parse(raw)); } catch { reject(new Error("Body non JSON")); } });
+      req.on("data",  chunk => raw += chunk);
+      req.on("end",   () => { try { resolve(JSON.parse(raw)); } catch { reject(new Error("Body non JSON")); } });
       req.on("error", reject);
     });
 
-    let messages;
-    let models;
+    if (body.type !== "text")
+      return res.status(400).json({ error: "Solo PDF supportato (type: text)" });
+    if (!body.text || body.text.trim().length < 30)
+      return res.status(400).json({ error: "Testo troppo corto" });
 
-    if (body.type === "text") {
-      // PDF: testo estratto e già ottimizzato dal client
-      if (!body.text || body.text.trim().length < 30)
-        return res.status(400).json({ error: "Testo troppo corto" });
+    const testoOriginale = body.text;
+    const testo = body.text.slice(0, 12000);
+    console.log(`[parse-bill] ${testo.length} chars`);
 
-      const testo = body.text.slice(0, 12000); // safety net server-side
-      console.log(`[parse-bill] testo ricevuto: ${body.text.length} chars → inviato: ${testo.length} chars`);
-      messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testo}` }];
-      models = TEXT_MODELS;
+    const messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testo}` }];
 
-    } else if (body.type === "image") {
-      // Immagine: base64
-      if (!body.mimeType || !body.data)
-        return res.status(400).json({ error: "Campi mimeType e data obbligatori" });
-
-      messages = [{
-        role: "user",
-        content: [
-          { type: "text",      text: PROMPT },
-          { type: "image_url", image_url: { url: `data:${body.mimeType};base64,${body.data}` } },
-        ],
-      }];
-      // Per immagini: openrouter/free con retry automatico
-      models = [
-        "mistralai/mistral-small-3.1-24b-instruct:free",
-        "openrouter/free",
-        "openrouter/free",
-        "openrouter/free",
-      ];
-
-    } else {
-      return res.status(400).json({ error: "Campo type obbligatorio: 'text' o 'image'" });
-    }
-
+    let parsed = null;
     const errors = [];
-    for (let i = 0; i < models.length; i++) {
-      const model = models[i];
-      // Delay crescente tra i tentativi per evitare rate limit
-      if (i > 0) await sleep(i * 1500);
+
+    // Primario: Groq (gratuito)
+    if (groqKey) {
       try {
-        const rawText = await callModel(model, messages, apiKey);
-        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) { errors.push(`${model}: nessun JSON`); continue; }
-
-        let parsed;
-        try { parsed = JSON.parse(jsonMatch[0]); }
-        catch { errors.push(`${model}: JSON malformato`); continue; }
-
-        if (!parsed.pod_pdr)
-          return res.status(422).json({ error: "POD/PDR non trovato nella bolletta." });
-
-        return res.status(200).json({ ok: true, data: parsed, model_used: model });
-
-      } catch (err) {
-        errors.push(err.message);
-        // Se è 429 aspetta più a lungo prima del prossimo tentativo
-        if (err.message.includes("429")) await sleep(3000);
-        continue;
+        parsed = parseJson(await callGroq(messages, groqKey));
+      } catch (e) {
+        errors.push(`Groq: ${e.message}`);
       }
     }
 
-    console.error("[parse-bill] Tutti i modelli falliti:", errors);
-    return res.status(502).json({
-      error: "Nessun modello disponibile. Riprova tra qualche minuto.",
-      detail: errors.join(" | ")
-    });
+    // Fallback: OpenRouter free
+    if (!parsed && orKey) {
+      for (const model of OR_FALLBACK_MODELS) {
+        try {
+          parsed = parseJson(await callOpenRouter(model, messages, orKey));
+          break;
+        } catch (e) {
+          errors.push(e.message);
+          await new Promise(r => setTimeout(r, 1500));
+        }
+      }
+    }
+
+    if (!parsed) {
+      console.error("[parse-bill] tutti falliti:", errors);
+      return res.status(502).json({ error: "Parsing non riuscito. Riprova.", detail: errors.join(" | ") });
+    }
+
+    if (!parsed.pod_pdr)
+      return res.status(422).json({ error: "POD/PDR non trovato nella bolletta." });
+
+    // Post-processing: regex sovrascrive prezzo LLM (deterministico e affidabile)
+    const prezzoRegex = extractPrezzoRegex(testoOriginale);
+    if (prezzoRegex !== null) {
+      console.log(`[parse-bill] prezzo regex: ${prezzoRegex} (LLM: ${parsed.prezzo_materia_prima})`);
+      parsed.prezzo_materia_prima = prezzoRegex;
+    }
+
+    return res.status(200).json({ ok: true, data: parsed });
 
   } catch (err) {
-    console.error("parse-bill crash:", err.message);
+    console.error("[parse-bill] crash:", err.message);
     return res.status(500).json({ error: err.message });
   }
 }
 
-// Vercel: estende il timeout a 60s (necessario per retry con delay)
 export const config = { maxDuration: 60 };

@@ -200,9 +200,15 @@ function LuceChart({ data, label }) {
     const bX = Math.max(LUCE_M.left, Math.min(w-LUCE_M.right-bW, dotX-bW/2));
     const aTip = Math.max(bX+bR, Math.min(bX+bW-bR, dotX));
     const bY = dotY - LIFT - bH;
+    const lineBottom = LUCE_H - XAXIS_H - 6;
     return (
       <svg style={{ position:"absolute", inset:0, pointerEvents:"none", overflow:"visible" }} width={w} height={LUCE_H}>
+        {/* Linea verticale tratteggiata */}
+        <line x1={dotX} y1={dotY+6} x2={dotX} y2={lineBottom}
+          stroke="#f59e0b" strokeWidth={1} strokeDasharray="3 3" strokeOpacity={0.5} />
+        {/* Punto attivo */}
         <circle cx={dotX} cy={dotY} r={5} fill="#f59e0b" />
+        {/* Tooltip balloon */}
         <rect x={bX} y={bY} width={bW} height={bH} rx={bR} ry={bR} fill="#f59e0b" />
         <polygon points={`${aTip-5},${bY+bH-2} ${aTip+5},${bY+bH-2} ${aTip},${bY+bH+10}`} fill="#f59e0b" />
         <text x={bX+bW/2} y={bY+bH/2+5} textAnchor="middle" fill="black" fontWeight="800" fontSize="13" fontFamily="Sora,sans-serif">{data[activeIdx].kwh} kWh</text>
@@ -234,7 +240,7 @@ function LuceChart({ data, label }) {
               tick={{ fill:"#4b5563", fontSize:9 }} interval={0} />
             <YAxis hide domain={[0, MAX_KWH*1.1]} />
             <Area type="natural" dataKey="kwh" stroke="#f59e0b" strokeWidth={2}
-              fill={`url(#lgLuce${label||""})`} dot={false} isAnimationActive={false} />
+              fill={`url(#lgLuce${label||""})`} dot={false} activeDot={false} isAnimationActive={false} />
           </AreaChart>
         </ResponsiveContainer>
         {renderOverlay()}
