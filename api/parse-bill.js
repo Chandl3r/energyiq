@@ -101,7 +101,38 @@ export default async function handler(req, res) {
       if (!body.text || body.text.trim().length < 30)
         return res.status(400).json({ error: "Testo troppo corto" });
 
-      messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${body.text.slice(0, 8000)}` }];
+      // Estratto intelligente: manteniamo sotto i ~10.000 chars per rispettare
+      // i limiti di contesto dei modelli free, ma includiamo sempre le sezioni chiave.
+      const raw = body.text;
+      let estratto;
+
+      if (raw.length <= 10000) {
+        // Testo corto: mandalo tutto
+        estratto = raw;
+      } else {
+        // Testo lungo: prendi inizio + sezione storico + fine
+        const INIZIO = raw.slice(0, 3500);
+        const FINE   = raw.slice(-3500);
+
+        // Cerca la sezione storico consumi (tipicamente nella parte centrale/finale)
+        const idxStorico = raw.toLowerCase().search(
+          /storico|informazioni storiche|andamento consumi|consumo mensile|mesi precedenti/
+        );
+        const STORICO = idxStorico >= 0
+          ? raw.slice(Math.max(0, idxStorico - 200), Math.min(raw.length, idxStorico + 3000))
+          : "";
+
+        // Unisci le sezioni deduplicando eventuali sovrapposizioni
+        const parts = [INIZIO];
+        if (STORICO && !INIZIO.includes(STORICO.slice(0, 50))) parts.push("\n[...]\n" + STORICO);
+        if (!INIZIO.includes(FINE.slice(0, 50)) && !STORICO.includes(FINE.slice(0, 50)))
+          parts.push("\n[...]\n" + FINE);
+
+        estratto = parts.join("").slice(0, 11000); // hard cap sicuro
+      }
+
+      messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${estratto}` }];
+      console.log(`[parse-bill] PDF: raw=${raw.length} chars → estratto=${estratto.length} chars`);
       models = TEXT_MODELS;
 
     } else if (body.type === "image") {
