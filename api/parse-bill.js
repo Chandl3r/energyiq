@@ -52,10 +52,13 @@ Regole OBBLIGATORIE — leggile con attenzione:
 
 7. Se un campo non è presente usa null.`;
 
-// Modelli TESTO — stabili, confermati nella lista free
+// Modelli TESTO — lista ampia con fallback, se uno è down passa al successivo
 const TEXT_MODELS = [
   "meta-llama/llama-3.3-70b-instruct:free",
+  "deepseek/deepseek-chat-v3-0324:free",
+  "mistralai/mistral-small-3.1-24b-instruct:free",
   "google/gemma-3-12b-it:free",
+  "microsoft/phi-4-reasoning:free",
   "google/gemma-3n-e2b-it:free",
 ];
 
@@ -97,42 +100,13 @@ export default async function handler(req, res) {
     let models;
 
     if (body.type === "text") {
-      // PDF: testo estratto client-side
+      // PDF: testo estratto e già ottimizzato dal client
       if (!body.text || body.text.trim().length < 30)
         return res.status(400).json({ error: "Testo troppo corto" });
 
-      // Estratto intelligente: manteniamo sotto i ~10.000 chars per rispettare
-      // i limiti di contesto dei modelli free, ma includiamo sempre le sezioni chiave.
-      const raw = body.text;
-      let estratto;
-
-      if (raw.length <= 10000) {
-        // Testo corto: mandalo tutto
-        estratto = raw;
-      } else {
-        // Testo lungo: prendi inizio + sezione storico + fine
-        const INIZIO = raw.slice(0, 3500);
-        const FINE   = raw.slice(-3500);
-
-        // Cerca la sezione storico consumi (tipicamente nella parte centrale/finale)
-        const idxStorico = raw.toLowerCase().search(
-          /storico|informazioni storiche|andamento consumi|consumo mensile|mesi precedenti/
-        );
-        const STORICO = idxStorico >= 0
-          ? raw.slice(Math.max(0, idxStorico - 200), Math.min(raw.length, idxStorico + 3000))
-          : "";
-
-        // Unisci le sezioni deduplicando eventuali sovrapposizioni
-        const parts = [INIZIO];
-        if (STORICO && !INIZIO.includes(STORICO.slice(0, 50))) parts.push("\n[...]\n" + STORICO);
-        if (!INIZIO.includes(FINE.slice(0, 50)) && !STORICO.includes(FINE.slice(0, 50)))
-          parts.push("\n[...]\n" + FINE);
-
-        estratto = parts.join("").slice(0, 11000); // hard cap sicuro
-      }
-
-      messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${estratto}` }];
-      console.log(`[parse-bill] PDF: raw=${raw.length} chars → estratto=${estratto.length} chars`);
+      const testo = body.text.slice(0, 12000); // safety net server-side
+      console.log(`[parse-bill] testo ricevuto: ${body.text.length} chars → inviato: ${testo.length} chars`);
+      messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testo}` }];
       models = TEXT_MODELS;
 
     } else if (body.type === "image") {

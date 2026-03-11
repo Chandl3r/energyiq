@@ -30,7 +30,29 @@ async function extractPdfText(file) {
     const content = await page.getTextContent();
     text += content.items.map(item => item.str).join(" ") + "\n";
   }
-  return text.trim();
+  const raw = text.trim();
+
+  // Estratto intelligente: manteniamo sotto 10.000 chars per i modelli free
+  if (raw.length <= 10000) return raw;
+
+  const INIZIO = raw.slice(0, 3500);
+  const FINE   = raw.slice(-3000);
+
+  // Trova sezione storico consumi (sempre nella parte centrale/finale)
+  const idxStorico = raw.toLowerCase().search(
+    /storico|informazioni storiche|andamento consumi|consumo mensile|mesi precedenti/
+  );
+  const STORICO = idxStorico >= 0
+    ? raw.slice(Math.max(0, idxStorico - 200), Math.min(raw.length, idxStorico + 3000))
+    : "";
+
+  const parts = [INIZIO];
+  if (STORICO && !INIZIO.includes(STORICO.slice(0, 60)))
+    parts.push("\n[...]\n" + STORICO);
+  if (!INIZIO.includes(FINE.slice(0, 60)) && !STORICO.includes(FINE.slice(0, 60)))
+    parts.push("\n[...]\n" + FINE);
+
+  return parts.join("").slice(0, 10000);
 }
 
 function fileToBase64(file) {
