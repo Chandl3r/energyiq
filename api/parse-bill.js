@@ -52,13 +52,12 @@ Regole OBBLIGATORIE — leggile con attenzione:
 
 7. Se un campo non è presente usa null.`;
 
-// Modelli TESTO — solo modelli confermati funzionanti, in ordine di preferenza
+// Modelli TESTO — senza suffisso :free, usa i crediti (~$0.0004 a bolletta = 1000 anni con $5)
 const TEXT_MODELS = [
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "google/gemma-3-27b-it:free",
-  "google/gemma-3-12b-it:free",
-  "mistralai/mistral-small-3.1-24b-instruct:free",
-  "google/gemma-3n-e2b-it:free",
+  "meta-llama/llama-3.3-70b-instruct",
+  "google/gemma-3-27b-it",
+  "mistralai/mistral-small-3.1-24b-instruct",
+  "google/gemma-3-12b-it",
 ];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
