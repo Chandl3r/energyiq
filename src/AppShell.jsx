@@ -364,7 +364,7 @@ function Dashboard({ user, dati, onGoUpload }) {
                     <polyline points={risparmia ? "1,4 6,9 11,4" : "1,8 6,3 11,8"}
                       fill="none" stroke={colore} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
-                  <span style={{ color:colore, fontSize:9, fontWeight:700, fontFamily:"'Sora',sans-serif" }}>
+                  <span style={{ color:colore, fontSize:11, fontWeight:700, fontFamily:"'Sora',sans-serif" }}>
                     {risparmia ? `risparmi ~${val.toLocaleString("it-IT")}€/${periodoLabel}` : `spendi ~${val.toLocaleString("it-IT")}€/${periodoLabel} in più`}
                   </span>
                 </span>
