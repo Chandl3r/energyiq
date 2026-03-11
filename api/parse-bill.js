@@ -52,15 +52,16 @@ Regole OBBLIGATORIE — leggile con attenzione:
 
 7. Se un campo non è presente usa null.`;
 
-// Modelli TESTO — lista ampia con fallback, se uno è down passa al successivo
+// Modelli TESTO — solo modelli confermati funzionanti, in ordine di preferenza
 const TEXT_MODELS = [
   "meta-llama/llama-3.3-70b-instruct:free",
-  "deepseek/deepseek-chat-v3-0324:free",
-  "mistralai/mistral-small-3.1-24b-instruct:free",
+  "google/gemma-3-27b-it:free",
   "google/gemma-3-12b-it:free",
-  "microsoft/phi-4-reasoning:free",
+  "mistralai/mistral-small-3.1-24b-instruct:free",
   "google/gemma-3n-e2b-it:free",
 ];
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function callModel(model, messages, apiKey) {
   const res = await fetch(OPENROUTER_URL, {
@@ -140,7 +141,10 @@ export default async function handler(req, res) {
     }
 
     const errors = [];
-    for (const model of models) {
+    for (let i = 0; i < models.length; i++) {
+      const model = models[i];
+      // Delay crescente tra i tentativi per evitare rate limit
+      if (i > 0) await sleep(i * 1500);
       try {
         const rawText = await callModel(model, messages, apiKey);
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
@@ -157,6 +161,8 @@ export default async function handler(req, res) {
 
       } catch (err) {
         errors.push(err.message);
+        // Se è 429 aspetta più a lungo prima del prossimo tentativo
+        if (err.message.includes("429")) await sleep(3000);
         continue;
       }
     }
@@ -172,3 +178,6 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
+
+// Vercel: estende il timeout a 60s (necessario per retry con delay)
+export const config = { maxDuration: 60 };
