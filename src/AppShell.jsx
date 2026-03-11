@@ -104,8 +104,8 @@ function RingCard({ tipo, label, value, unit, pct, vsAnno, badge, prezzo, color,
         )}
         {badge && (
           <div style={{ display:"flex", alignItems:"center", gap:3, marginBottom:2 }}>
-            <svg width="10" height="10" viewBox="0 0 10 10"><polyline points={badge.up ? "1,7 5,3 9,7" : "1,3 5,7 9,3"} fill="none" stroke={C.green} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            <span style={{ color:C.green, fontSize:9, fontWeight:700, whiteSpace:"nowrap" }}>{badge.label}</span>
+            <svg width="10" height="10" viewBox="0 0 10 10"><polyline points={badge.conveniente ? "1,7 5,3 9,7" : "1,3 5,7 9,3"} fill="none" stroke={badge.conveniente ? C.green : C.red} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <span style={{ color:badge.conveniente ? C.green : C.red, fontSize:9, fontWeight:700, whiteSpace:"nowrap" }}>{badge.label}</span>
           </div>
         )}
         <p style={{ color:C.textDim, fontSize:9, margin:0, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{prezzo}</p>
@@ -341,8 +341,11 @@ function Dashboard({ user, dati, onGoUpload }) {
           const bollF     = f ? bollettePerFornitura(f.id) : [];
           const benchmark = isLuce ? BENCHMARK_LUCE_MESE : BENCHMARK_GAS_MESE;
           const pct       = f ? calcPct(bollF, benchmark) : 2;
-          const totale    = bollF.reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
-          const ultimaB   = bollF[bollF.length-1];
+          const ultimaB      = bollF[bollF.length-1];
+          const consumoAnnuoB = ultimaB?.dati_estratti?.consumo_annuo;
+          const totale       = consumoAnnuoB
+            ? Number(consumoAnnuoB)
+            : bollF.reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
           const prezzo    = ultimaB?.dati_estratti?.prezzo_materia_prima;
           const multiLine = isLuce ? forLuce.length > 1 : forGas.length > 1;
           const label     = f && multiLine ? (f.nickname ?? f.fornitore ?? f.pod_pdr) : null;
@@ -367,8 +370,9 @@ function Dashboard({ user, dati, onGoUpload }) {
           const ultimoInd  = [...indici].filter(i => i.tipo_indice === (isLuce?"PUN":"PSV"))
                                          .sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
           const tariffaNum = prezzo ? parseFloat(prezzo) : null;
+          const conveniente = tariffaNum && ultimoInd && tariffaNum < ultimoInd.valore_medio;
           const badge = (tariffaNum && ultimoInd)
-            ? { label: tariffaNum < ultimoInd.valore_medio ? "Conveniente" : "Costoso", up: true }
+            ? { label: conveniente ? "Conveniente" : "Costoso", conveniente }
             : null;
 
           return (
@@ -601,7 +605,7 @@ function MercatoScreen({ dati }) {
       <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:14, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
         <div>
           <p style={{ color:C.textMid, fontSize:12, fontWeight:600, margin:"0 0 2px" }}>Fonte dati</p>
-          <p style={{ color:C.textDim, fontSize:11, margin:0 }}>GME · Aggiornamento manuale mensile</p>
+          <p style={{ color:C.textDim, fontSize:11, margin:0 }}>GME · Aggiornamento giornaliero</p>
         </div>
         <ArrowUpRight size={16} color={C.textDim} />
       </div>
@@ -619,12 +623,6 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
   const [editValue,  setEditValue]  = useState("");
   const [loading,    setLoading]    = useState(false);
 
-  // Stato aggiornamento indici
-  const now = new Date();
-  const meseDefault = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
-  const [indiciForm, setIndiciForm] = useState({ mese: meseDefault, pun: "", psv: "" });
-  const [indiciSaved, setIndiciSaved] = useState(false);
-
   const tuttiOrdinate = [...bollette]
     .sort((a,b) => new Date(b.data_emissione||b.periodo_fine) - new Date(a.data_emissione||a.periodo_fine));
 
@@ -641,21 +639,6 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
     await supabase.from("forniture").update({ nickname: editValue || null }).eq("id", fornituraId);
     setEditingId(null);
     setLoading(false);
-    onRefresh?.();
-  };
-
-  const salvaIndici = async () => {
-    const { mese, pun, psv } = indiciForm;
-    if (!mese || (!pun && !psv)) return;
-    setLoading(true);
-    const meseAnno = `${mese}-01`;
-    const rows = [];
-    if (pun) rows.push({ tipo_indice:"PUN", mese_anno:meseAnno, valore_medio:parseFloat(pun.replace(",",".")), fonte:"GME" });
-    if (psv) rows.push({ tipo_indice:"PSV", mese_anno:meseAnno, valore_medio:parseFloat(psv.replace(",",".")), fonte:"GME" });
-    await supabase.from("indici_mercato").upsert(rows, { onConflict:"tipo_indice,mese_anno" });
-    setLoading(false);
-    setIndiciSaved(true);
-    setTimeout(() => setIndiciSaved(false), 3000);
     onRefresh?.();
   };
 
@@ -682,24 +665,14 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
         </div>
       </div>
 
-      {/* Aggiorna indici mercato */}
-      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
-          <div>
+      {/* Indici mercato — sola visualizzazione, aggiornamento via GitHub Action */}
+      {(ultimoPUN || ultimoPSV) && (
+        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:0 }}>Indici mercato</p>
-            <p style={{ color:C.textDim, fontSize:11, margin:"3px 0 0" }}>
-              Aggiorna una volta al mese da{" "}
-              <span style={{ color:C.amber }}>facile.it</span> o <span style={{ color:C.amber }}>switcho.it</span>
-            </p>
+            <span style={{ background:C.greenDim, color:C.green, fontSize:10, fontWeight:700, borderRadius:20, padding:"3px 10px" }}>Aggiornamento automatico</span>
           </div>
-          {indiciSaved && (
-            <span style={{ background:C.greenDim, color:C.green, fontSize:11, fontWeight:700, borderRadius:20, padding:"3px 10px" }}>
-              Salvato ✓
-            </span>
-          )}
-        </div>
-        {(ultimoPUN || ultimoPSV) && (
-          <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+          <div style={{ display:"flex", gap:8 }}>
             {ultimoPUN && (
               <div style={{ flex:1, background:C.amberDim, borderRadius:10, padding:"8px 10px" }}>
                 <p style={{ color:C.textDim, fontSize:9, margin:"0 0 2px", textTransform:"uppercase", letterSpacing:1 }}>PUN {meseFmt(ultimoPUN.mese_anno)}</p>
@@ -713,31 +686,8 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
               </div>
             )}
           </div>
-        )}
-        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-          <input type="month" value={indiciForm.mese}
-            onChange={e => setIndiciForm(f => ({...f, mese:e.target.value}))}
-            style={{ background:C.bg, border:`1px solid ${C.border2}`, borderRadius:10, padding:"8px 12px", color:C.text, fontSize:13, outline:"none", width:"100%" }} />
-          <div style={{ display:"flex", gap:8 }}>
-            <div style={{ flex:1 }}>
-              <p style={{ color:C.amber, fontSize:10, fontWeight:700, margin:"0 0 4px", letterSpacing:1 }}>PUN (€/kWh)</p>
-              <input placeholder="es. 0.1144" value={indiciForm.pun}
-                onChange={e => setIndiciForm(f => ({...f, pun:e.target.value}))}
-                style={{ width:"100%", background:C.bg, border:`1px solid ${C.border2}`, borderRadius:10, padding:"8px 12px", color:C.text, fontSize:13, outline:"none" }} />
-            </div>
-            <div style={{ flex:1 }}>
-              <p style={{ color:C.sky, fontSize:10, fontWeight:700, margin:"0 0 4px", letterSpacing:1 }}>PSV (€/Smc)</p>
-              <input placeholder="es. 0.6310" value={indiciForm.psv}
-                onChange={e => setIndiciForm(f => ({...f, psv:e.target.value}))}
-                style={{ width:"100%", background:C.bg, border:`1px solid ${C.border2}`, borderRadius:10, padding:"8px 12px", color:C.text, fontSize:13, outline:"none" }} />
-            </div>
-          </div>
-          <button onClick={salvaIndici} disabled={loading || (!indiciForm.pun && !indiciForm.psv)}
-            style={{ background:C.amber, border:"none", borderRadius:12, padding:"12px", cursor:"pointer", color:"#000", fontSize:13, fontWeight:700, opacity:(!indiciForm.pun && !indiciForm.psv)?0.4:1 }}>
-            {loading ? "Salvataggio..." : "Salva indici"}
-          </button>
         </div>
-      </div>
+      )}
 
       {/* Forniture con nickname */}
       {forniture.length > 0 && (

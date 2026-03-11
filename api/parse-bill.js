@@ -17,6 +17,7 @@ Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun back
   "periodo_inizio": "YYYY-MM-DD o null",
   "periodo_fine": "YYYY-MM-DD o null",
   "consumo_fatturato": numero o null,
+  "consumo_annuo": numero o null,
   "unita_misura": "kWh" oppure "Smc",
   "totale_pagare": numero in euro o null,
   "prezzo_materia_prima": numero es 0.12636 o null,
@@ -25,10 +26,23 @@ Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun back
   "note": "info rilevanti o null"
 }
 
-Regole:
-- tipo_utenza: elettricità/luce = LUCE, gas = GAS
-- pod_pdr: per luce "POD" + "IT...", per gas "PDR" + numero. OBBLIGATORIO.
-- Se un campo non è presente usa null`;
+Regole OBBLIGATORIE — leggile con attenzione:
+
+1. tipo_utenza: elettricità/luce = LUCE, gas = GAS
+
+2. pod_pdr: per luce il codice POD inizia con "IT" (es. IT012E00367605), per gas il PDR è numerico (es. 05260200451415). OBBLIGATORIO.
+
+3. consumo_fatturato: il consumo del PERIODO di questa bolletta (es. "Consumo totale fatturato del periodo" o "Consumo totale fatturato"). NON usare il consumo annuo qui.
+
+4. consumo_annuo: il consumo annuale indicato nella sezione "CONSUMO ANNUO" o "Informazioni storiche" o "Consumo Annuo" (es. 5268 kWh oppure 817 Smc). Questo valore si riferisce agli ultimi 12 mesi, non al periodo della bolletta.
+
+5. prezzo_materia_prima: ATTENZIONE — devi prendere il prezzo DAL BOX DELL'OFFERTA, non dallo Scontrino dell'Energia.
+   - Per luce: cerca "Prezzo Fisso" nel "Box dell'Offerta" o "spesa per la vendita di energia elettrica". Es: "Prezzo Fisso(Dic.25)=0,12636 €/kWh" → estrai 0.12636
+   - Per gas: cerca "Prezzo Fisso" nel "Box dell'Offerta" o "spesa per la vendita di gas naturale". Es: "Prezzo Fisso(Gen.26)=0,513393 €/Smc" → estrai 0.513393
+   - NON usare il "Prezzo medio" dello Scontrino dell'Energia (quello include rete e oneri di sistema, non è il prezzo della materia prima).
+   - Se il prezzo è variabile (indicizzato PUN/PSV), usa il valore del mese corrente della bolletta.
+
+6. Se un campo non è presente usa null.`;
 
 // Modelli TESTO — stabili, confermati nella lista free
 const TEXT_MODELS = [
