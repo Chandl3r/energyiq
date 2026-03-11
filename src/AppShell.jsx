@@ -292,6 +292,34 @@ function Dashboard({ user, dati, onGoUpload }) {
   const spesaTotale = bollette.reduce((s,b) => s + Number(b.totale_pagare||0), 0);
   const nomeUtente  = user?.user_metadata?.full_name ?? user?.email?.split("@")[0] ?? "Utente";
 
+  // Risparmio/extra-costo vs mercato (PUN/PSV) da dati
+  const { indici = [] } = dati;
+  const ultimoPUN = [...indici].filter(i => i.tipo_indice === "PUN").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
+  const ultimoPSV = [...indici].filter(i => i.tipo_indice === "PSV").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
+  const calcolaRisparmio = () => {
+    if (!hasDati) return null;
+    let totale = 0;
+    let haCalcolo = false;
+    forniture.forEach(f => {
+      const bollF = bollettePerFornitura(f.id);
+      const ultimaB = bollF[bollF.length - 1];
+      const tariffa = parseFloat(ultimaB?.dati_estratti?.prezzo_materia_prima);
+      const consumo = ultimaB?.dati_estratti?.consumo_annuo
+        ? Number(ultimaB.dati_estratti.consumo_annuo)
+        : bollF.reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
+      const indice = f.tipo_utenza === "LUCE" ? ultimoPUN : ultimoPSV;
+      if (tariffa && indice && consumo > 0) {
+        totale += (tariffa - indice.valore_medio) * consumo;
+        haCalcolo = true;
+      }
+    });
+    if (!haCalcolo) return null;
+    return Math.round(totale); // positivo = spendi di più vs mercato, negativo = risparmi
+  };
+  const risparmioVsMercato = calcolaRisparmio();
+  // Label periodo: se abbiamo consumo_annuo usiamo "anno", altrimenti "periodo"
+  const periodoLabel = "anno";
+
   // Ultime bollette
   const ultimeBollette = [...bollette]
     .sort((a,b) => new Date(b.data_emissione||b.periodo_fine) - new Date(a.data_emissione||a.periodo_fine))
@@ -319,13 +347,29 @@ function Dashboard({ user, dati, onGoUpload }) {
         </div>
         <div style={{ marginTop:20, paddingTop:16, borderTop:`1px solid ${C.border}` }}>
           <p style={{ color:C.textDim, fontSize:11, margin:"0 0 4px", letterSpacing:1, textTransform:"uppercase" }}>
-            {hasDati ? "Spesa totale bollette" : "Nessun dato ancora"}
+            {hasDati ? "Spesa annua totale" : "Nessun dato ancora"}
           </p>
-          <div style={{ display:"flex", alignItems:"baseline", gap:8 }}>
+          <div style={{ display:"flex", alignItems:"baseline", gap:8, flexWrap:"wrap" }}>
             <span style={{ color:C.text, fontSize:32, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>
               {hasDati ? Math.round(spesaTotale).toLocaleString("it-IT") : "—"}
             </span>
             {hasDati && <span style={{ color:C.textMid, fontSize:16 }}>€</span>}
+            {risparmioVsMercato !== null && (() => {
+              const risparmia = risparmioVsMercato < 0;
+              const val = Math.abs(risparmioVsMercato);
+              const colore = risparmia ? C.green : C.red;
+              return (
+                <span style={{ display:"flex", alignItems:"center", gap:4 }}>
+                  <svg width="12" height="12" viewBox="0 0 12 12">
+                    <polyline points={risparmia ? "1,8 6,3 11,8" : "1,4 6,9 11,4"}
+                      fill="none" stroke={colore} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <span style={{ color:colore, fontSize:14, fontWeight:700, fontFamily:"'Sora',sans-serif" }}>
+                    {risparmia ? `risparmi ~${val.toLocaleString("it-IT")}€/${periodoLabel}` : `spendi ~${val.toLocaleString("it-IT")}€/${periodoLabel} in più`}
+                  </span>
+                </span>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -628,7 +672,18 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
 
   const eliminaBolletta = async (id) => {
     setLoading(true);
+    // Trova la fornitura della bolletta prima di eliminarla
+    const bolletta = bollette.find(b => b.id === id);
+    const fornituraId = bolletta?.fornitura_id;
+    // Elimina la bolletta
     await supabase.from("bollette").delete().eq("id", id);
+    // Se era l'ultima bolletta di quella fornitura, elimina anche la fornitura
+    if (fornituraId) {
+      const rimaste = bollette.filter(b => b.id !== id && b.fornitura_id === fornituraId);
+      if (rimaste.length === 0) {
+        await supabase.from("forniture").delete().eq("id", fornituraId);
+      }
+    }
     setDeletingId(null);
     setLoading(false);
     onRefresh?.();
