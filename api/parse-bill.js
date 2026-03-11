@@ -74,7 +74,13 @@ async function callModel(model, messages, apiKey) {
     body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 1024 }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
+  // Log completo per debug
+  if (!res.ok) {
+    const errMsg = data?.error?.message ?? data?.error ?? JSON.stringify(data);
+    console.error(`[callModel] ${model} → HTTP ${res.status}: ${errMsg}`);
+    throw new Error(`${model}: HTTP ${res.status} — ${errMsg}`);
+  }
+  console.log(`[callModel] ${model} → OK`);
   return data.choices?.[0]?.message?.content ?? "";
 }
 
@@ -133,16 +139,16 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Campo type obbligatorio: 'text' o 'image'" });
     }
 
-    let lastError = null;
+    const errors = [];
     for (const model of models) {
       try {
         const rawText = await callModel(model, messages, apiKey);
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) { lastError = `Nessun JSON da ${model}`; continue; }
+        if (!jsonMatch) { errors.push(`${model}: nessun JSON`); continue; }
 
         let parsed;
         try { parsed = JSON.parse(jsonMatch[0]); }
-        catch { lastError = `JSON malformato da ${model}`; continue; }
+        catch { errors.push(`${model}: JSON malformato`); continue; }
 
         if (!parsed.pod_pdr)
           return res.status(422).json({ error: "POD/PDR non trovato nella bolletta." });
@@ -150,12 +156,16 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true, data: parsed, model_used: model });
 
       } catch (err) {
-        lastError = err.message;
+        errors.push(err.message);
         continue;
       }
     }
 
-    return res.status(502).json({ error: "Nessun modello disponibile. Riprova.", detail: lastError });
+    console.error("[parse-bill] Tutti i modelli falliti:", errors);
+    return res.status(502).json({
+      error: "Nessun modello disponibile. Riprova tra qualche minuto.",
+      detail: errors.join(" | ")
+    });
 
   } catch (err) {
     console.error("parse-bill crash:", err.message);
