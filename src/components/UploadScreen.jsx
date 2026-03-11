@@ -25,7 +25,7 @@ async function extractPdfText(file) {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   let text = "";
-  for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
+  for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     text += content.items.map(item => item.str).join(" ") + "\n";
@@ -64,6 +64,21 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         const testo = await extractPdfText(file);
         if (!testo || testo.length < 50)
           throw new Error("PDF senza testo selezionabile. Prova a fotografare la bolletta.");
+
+        // ── DEBUG: mostra quante pagine e quanti chars sono stati estratti ──
+        console.log("=== PDF DEBUG ===");
+        console.log("Lunghezza testo estratto:", testo.length, "chars");
+        // Cerca keyword storico nel testo
+        const lower = testo.toLowerCase();
+        const idxStorico = lower.search(/storico|informazioni storiche|andamento|consumo ann/);
+        if (idxStorico >= 0) {
+          console.log("✅ Trovata sezione storico a posizione:", idxStorico);
+          console.log("Estratto intorno allo storico:", testo.slice(Math.max(0, idxStorico-100), idxStorico+500));
+        } else {
+          console.log("❌ Sezione storico NON trovata nel testo estratto dal PDF");
+        }
+        console.log("=================");
+
         payload = { type: "text", text: testo };
       } else {
         const b64  = await fileToBase64(file);
@@ -78,6 +93,14 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.detail ?? json.error ?? `HTTP ${res.status}`);
+
+      // ── DEBUG: mostra cosa ha estratto il modello ──
+      console.log("=== LLM OUTPUT DEBUG ===");
+      console.log("Modello usato:", json.model_used);
+      console.log("storico_mensile:", JSON.stringify(json.data?.storico_mensile));
+      console.log("consumo_fatturato:", json.data?.consumo_fatturato);
+      console.log("consumo_annuo:", json.data?.consumo_annuo);
+      console.log("========================");
 
       setDatiEstrat(json.data);
       setFase("review");
@@ -268,6 +291,40 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                   fontFamily: k==="POD"||k==="PDR" ? "monospace":"inherit" }}>{v}</span>
               </div>
             ))}
+            {/* Storico mensile estratto */}
+            {(() => {
+              const storico = datiEstrat.storico_mensile ?? [];
+              return (
+                <div style={{ borderTop:`1px solid #1e1e1e`, paddingTop:10, marginTop:4 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                    <span style={{ color:C.textDim, fontSize:12 }}>Storico mensile</span>
+                    <span style={{
+                      background: storico.length > 0 ? C.greenDim : "#2a1500",
+                      color:      storico.length > 0 ? C.green    : "#f97316",
+                      fontSize:10, fontWeight:700, borderRadius:20, padding:"2px 8px"
+                    }}>
+                      {storico.length > 0 ? `${storico.length} mesi estratti` : "Non trovato nel PDF"}
+                    </span>
+                  </div>
+                  {storico.length > 0 && (
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
+                      {storico.slice(-6).map((s,i) => (
+                        <div key={i} style={{ background:C.surface2, borderRadius:8, padding:"3px 8px", fontSize:10 }}>
+                          <span style={{ color:C.textMid }}>{s.mese?.slice(0,7)} </span>
+                          <span style={{ color:C.text, fontWeight:600 }}>{s.consumo}</span>
+                        </div>
+                      ))}
+                      {storico.length > 6 && <span style={{ color:C.textDim, fontSize:10, alignSelf:"center" }}>+{storico.length-6} altri</span>}
+                    </div>
+                  )}
+                  {storico.length === 0 && (
+                    <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.5 }}>
+                      Il grafico mostrerà solo il periodo di questa bolletta. Carica più bollette per espandere lo storico, oppure importa i dati ARERA.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <button onClick={salva} style={{ width:"100%", padding:"16px", borderRadius:18, background:C.green, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
             <Save size={18} color="#fff" />
