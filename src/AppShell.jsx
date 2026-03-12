@@ -204,10 +204,10 @@ function LuceChart({ data, label }) {
     return (
       <svg style={{ position:"absolute", inset:0, pointerEvents:"none", overflow:"visible" }} width={w} height={LUCE_H}>
         {/* Linea verticale tratteggiata */}
-        <line x1={dotX} y1={dotY+6} x2={dotX} y2={lineBottom}
+        <line x1={dotX} y1={dotY+7} x2={dotX} y2={lineBottom}
           stroke="#f59e0b" strokeWidth={1} strokeDasharray="3 3" strokeOpacity={0.5} />
-        {/* Punto attivo */}
-        <circle cx={dotX} cy={dotY} r={5} fill="#f59e0b" />
+        {/* Punto attivo — bianco con bordo arancione */}
+        <circle cx={dotX} cy={dotY} r={5} fill="white" stroke="#f59e0b" strokeWidth={2} />
         {/* Tooltip balloon */}
         <rect x={bX} y={bY} width={bW} height={bH} rx={bR} ry={bR} fill="#f59e0b" />
         <polygon points={`${aTip-5},${bY+bH-2} ${aTip+5},${bY+bH-2} ${aTip},${bY+bH+10}`} fill="#f59e0b" />

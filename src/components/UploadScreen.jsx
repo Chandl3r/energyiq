@@ -21,6 +21,24 @@ const C = {
   text:"#ffffff", textMid:"#9ca3af", textDim:"#4b5563",
 };
 
+// Regex deterministico per prezzo materia prima — gira sul testo COMPLETO del PDF
+function extractPrezzoFromText(raw) {
+  const patterns = [
+    /Prezzo\s+Fisso\s*(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*€\s*\/\s*(?:kWh|Smc)/i,
+    /Prezzo\s+Energia\s*(?:Fisso\s*)?(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*€\s*\/\s*(?:kWh|Smc)/i,
+    /=\s*(0[,.][\d]{4,6})\s*€\s*\/\s*kWh/,
+    /=\s*(0[,.][\d]{4,6})\s*€\s*\/\s*Smc/,
+  ];
+  for (const re of patterns) {
+    const m = raw.match(re);
+    if (m) {
+      const val = parseFloat(m[1].replace(",", "."));
+      if (val > 0.01 && val < 5) return val;
+    }
+  }
+  return null;
+}
+
 async function extractPdfText(file) {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -32,27 +50,33 @@ async function extractPdfText(file) {
   }
   const raw = text.trim();
 
-  // Estratto intelligente: manteniamo sotto 10.000 chars per i modelli free
-  if (raw.length <= 10000) return raw;
+  // Estrae prezzo sul testo completo PRIMA di qualsiasi slice
+  const prezzoOverride = extractPrezzoFromText(raw);
+  if (prezzoOverride) console.log("✅ Prezzo estratto client-side:", prezzoOverride);
+  else console.log("⚠️ Prezzo non trovato con regex client-side");
 
-  const INIZIO = raw.slice(0, 3500);
-  const FINE   = raw.slice(-3000);
+  // Slice intelligente per LLM: manteniamo sotto 10.000 chars
+  let testoLLM;
+  if (raw.length <= 10000) {
+    testoLLM = raw;
+  } else {
+    const INIZIO = raw.slice(0, 3500);
+    const FINE   = raw.slice(-3000);
+    const idxStorico = raw.toLowerCase().search(
+      /storico|informazioni storiche|andamento consumi|consumo mensile|mesi precedenti/
+    );
+    const STORICO = idxStorico >= 0
+      ? raw.slice(Math.max(0, idxStorico - 200), Math.min(raw.length, idxStorico + 3000))
+      : "";
+    const parts = [INIZIO];
+    if (STORICO && !INIZIO.includes(STORICO.slice(0, 60)))
+      parts.push("\n[...]\n" + STORICO);
+    if (!INIZIO.includes(FINE.slice(0, 60)) && !STORICO.includes(FINE.slice(0, 60)))
+      parts.push("\n[...]\n" + FINE);
+    testoLLM = parts.join("").slice(0, 10000);
+  }
 
-  // Trova sezione storico consumi (sempre nella parte centrale/finale)
-  const idxStorico = raw.toLowerCase().search(
-    /storico|informazioni storiche|andamento consumi|consumo mensile|mesi precedenti/
-  );
-  const STORICO = idxStorico >= 0
-    ? raw.slice(Math.max(0, idxStorico - 200), Math.min(raw.length, idxStorico + 3000))
-    : "";
-
-  const parts = [INIZIO];
-  if (STORICO && !INIZIO.includes(STORICO.slice(0, 60)))
-    parts.push("\n[...]\n" + STORICO);
-  if (!INIZIO.includes(FINE.slice(0, 60)) && !STORICO.includes(FINE.slice(0, 60)))
-    parts.push("\n[...]\n" + FINE);
-
-  return parts.join("").slice(0, 10000);
+  return { testoLLM, prezzoOverride };
 }
 
 function fileToBase64(file) {
@@ -83,14 +107,14 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       let payload;
 
       if (isPdf) {
-        const testo = await extractPdfText(file);
+        const { testoLLM, prezzoOverride } = await extractPdfText(file);
+        const testo = testoLLM;
         if (!testo || testo.length < 50)
           throw new Error("PDF senza testo selezionabile. Prova a fotografare la bolletta.");
 
-        // ── DEBUG: mostra quante pagine e quanti chars sono stati estratti ──
+        // ── DEBUG ──
         console.log("=== PDF DEBUG ===");
         console.log("Lunghezza testo estratto:", testo.length, "chars");
-        // Cerca keyword storico nel testo
         const lower = testo.toLowerCase();
         const idxStorico = lower.search(/storico|informazioni storiche|andamento|consumo ann/);
         if (idxStorico >= 0) {
@@ -101,7 +125,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         }
         console.log("=================");
 
-        payload = { type: "text", text: testo };
+        payload = { type: "text", text: testo, ...(prezzoOverride !== null && { prezzo_override: prezzoOverride }) };
       } else {
         const b64  = await fileToBase64(file);
         const mime = file.type || "image/jpeg";

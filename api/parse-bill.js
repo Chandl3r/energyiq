@@ -146,7 +146,6 @@ export default async function handler(req, res) {
     if (!body.text || body.text.trim().length < 30)
       return res.status(400).json({ error: "Testo troppo corto" });
 
-    const testoOriginale = body.text;
     const testo = body.text.slice(0, 12000);
     console.log(`[parse-bill] ${testo.length} chars`);
 
@@ -185,11 +184,16 @@ export default async function handler(req, res) {
     if (!parsed.pod_pdr)
       return res.status(422).json({ error: "POD/PDR non trovato nella bolletta." });
 
-    // Post-processing: regex sovrascrive prezzo LLM (deterministico e affidabile)
-    const prezzoRegex = extractPrezzoRegex(testoOriginale);
-    if (prezzoRegex !== null) {
-      console.log(`[parse-bill] prezzo regex: ${prezzoRegex} (LLM: ${parsed.prezzo_materia_prima})`);
-      parsed.prezzo_materia_prima = prezzoRegex;
+    // Post-processing prezzo: priorità → client regex (testo pieno) → server regex → LLM
+    if (body.prezzo_override != null) {
+      console.log(`[parse-bill] prezzo client-regex: ${body.prezzo_override} (LLM: ${parsed.prezzo_materia_prima})`);
+      parsed.prezzo_materia_prima = body.prezzo_override;
+    } else {
+      const prezzoRegex = extractPrezzoRegex(testo);
+      if (prezzoRegex !== null) {
+        console.log(`[parse-bill] prezzo server-regex: ${prezzoRegex} (LLM: ${parsed.prezzo_materia_prima})`);
+        parsed.prezzo_materia_prima = prezzoRegex;
+      }
     }
 
     return res.status(200).json({ ok: true, data: parsed });
