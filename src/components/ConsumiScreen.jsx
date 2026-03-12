@@ -1,201 +1,399 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "../lib/supabase";
 import {
-  BarChart, Bar, LineChart, Line,
+  LineChart, Line, BarChart, Bar,
   XAxis, YAxis, ResponsiveContainer, Tooltip, Cell,
 } from "recharts";
-import { Upload, X, CheckCircle, AlertCircle, Zap, Flame, Activity } from "lucide-react";
+import {
+  Upload, X, CheckCircle, AlertCircle, Zap, Flame,
+  ChevronLeft, ChevronRight, FileText,
+} from "lucide-react";
 
-// ─── Palette (identica ad AppShell) ──────────────────────────────────────────
+// ─── Palette ─────────────────────────────────────────────────────────────────
 const C = {
-  bg: "#080808", surface: "#111111", border: "#1f1f1f", border2: "#2a2a2a",
-  text: "#f5f5f5", textMid: "#9ca3af", textDim: "#4b5563",
-  amber: "#f59e0b", amberDim: "#1c1503", amberMid: "#78350f",
-  sky:   "#38bdf8", skyDim:   "#001f2e", skyMid:   "#0c4a6e",
-  green: "#22c55e",
+  bg:"#080808", surface:"#111111", border:"#1f1f1f", border2:"#2a2a2a",
+  text:"#f5f5f5", textMid:"#9ca3af", textDim:"#4b5563",
+  amber:"#f59e0b", amberDim:"#1c1503", amberMid:"#78350f",
+  sky:"#38bdf8",  skyDim:"#001f2e",   skyMid:"#0c4a6e",
+  green:"#22c55e", red:"#ef4444",
 };
-
-// ─── Utilities ────────────────────────────────────────────────────────────────
-const MESI = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
-
-function fmtMese(annomese) {
-  const s = String(annomese);
-  return `${MESI[parseInt(s.slice(4)) - 1]} ${s.slice(2,4)}`;
-}
+const MESI_S = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
+const MESI_L = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
+                "Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
 
 // ─── CSV Parsing ──────────────────────────────────────────────────────────────
 
 function parseLuceCSV(text) {
   const rows = text.trim().split("\n");
-  const header = rows[0].split(";");
-  const iData = header.findIndex(h => h.trim() === "data_lettura");
-  const iAnno = header.findIndex(h => h.trim() === "annomese_riferimento");
-  const iEa1  = header.findIndex(h => h.trim() === "ea1");
-  const iPod  = header.findIndex(h => h.trim() === "pod");
-
-  if (iData < 0 || iAnno < 0 || iEa1 < 0) return { error: "Colonne non trovate — verifica che sia il file ARERA Luce corretto." };
+  const hdr  = rows[0].split(";").map(h => h.trim());
+  const iData = hdr.findIndex(h => h === "data_lettura");
+  const iAnno = hdr.findIndex(h => h === "annomese_riferimento");
+  const iEa1  = hdr.findIndex(h => h === "ea1");
+  const iPod  = hdr.findIndex(h => h === "pod");
+  if (iData < 0 || iAnno < 0 || iEa1 < 0)
+    return { error: "Colonne non trovate — file ARERA Luce non riconosciuto." };
 
   const byDate = new Map();
   for (let i = 1; i < rows.length; i++) {
-    const cols = rows[i].split(";");
-    if (cols.length < iEa1 + 96) continue;
-    const dataTxt  = cols[iData]?.trim();
-    const annoMese = parseInt(cols[iAnno]?.trim());
-    const pod      = cols[iPod]?.trim() || "";
+    const c = rows[i].split(";");
+    if (c.length < iEa1 + 96) continue;
+    const dataTxt  = c[iData]?.trim();
+    const annoMese = parseInt(c[iAnno]?.trim());
+    const pod      = c[iPod]?.trim() || "";
     if (!dataTxt || !annoMese) continue;
-
-    // DD/MM/YYYY → YYYY-MM-DD
-    const parts = dataTxt.split("/");
-    if (parts.length !== 3) continue;
-    const [dd, mm, yyyy] = parts;
-    const dataISO = `${yyyy}-${mm.padStart(2,"0")}-${dd.padStart(2,"0")}`;
-
-    const ea = [];
-    let tot = 0;
-    for (let k = 0; k < 96; k++) {
-      const v = parseFloat(cols[iEa1 + k]) || 0;
-      ea.push(v);
-      tot += v;
-    }
-    // Deduplicazione: per la stessa data teniamo l'ultima riga
-    byDate.set(dataISO, {
-      pod,
-      data_lettura: dataISO,
-      annomese_riferimento: annoMese,
-      totale_kwh: Math.round(tot * 1000) / 1000,
-      valori_ea: ea,
-    });
+    const p = dataTxt.split("/");
+    if (p.length !== 3) continue;
+    const dataISO = `${p[2]}-${p[1].padStart(2,"0")}-${p[0].padStart(2,"0")}`;
+    const ea = []; let tot = 0;
+    for (let k = 0; k < 96; k++) { const v = parseFloat(c[iEa1+k])||0; ea.push(v); tot+=v; }
+    byDate.set(dataISO, { pod, data_lettura:dataISO, annomese_riferimento:annoMese,
+      totale_kwh:Math.round(tot*1000)/1000, valori_ea:ea });
   }
-  return { rows: Array.from(byDate.values()) };
+  const result = Array.from(byDate.values());
+  return { rows:result, count:result.length, mesi:new Set(result.map(r=>r.annomese_riferimento)).size };
 }
 
 function parseGasCSV(text) {
   const rows = text.trim().split("\n");
-  // PDR;ANNOMESE_RIFERIMENTO;DATA LETTURA;DATA RICEZIONE;FLUSSO;MOTIVAZIONE;LETTURA
-  const byData = new Map();
+  const byKey = new Map();
   for (let i = 1; i < rows.length; i++) {
-    const cols = rows[i].split(";");
-    if (cols.length < 7) continue;
-    const pdr        = cols[0]?.trim();
-    const annoMese   = parseInt(cols[1]?.trim());
-    const dataLettura= cols[2]?.trim();  // YYYY-MM-DD
-    const letturaTxt = cols[6]?.trim().replace(/^0+/, "") || "0";
-    const lettura    = parseFloat(letturaTxt) || 0;
-    if (!pdr || !annoMese || !dataLettura || lettura === 0) continue;
-    // Deduplicazione per data esatta (chiave = pdr+data)
-    const key = `${pdr}|${dataLettura}`;
-    const existing = byData.get(key);
-    if (!existing || lettura > existing.lettura_smc) {
-      byData.set(key, { pdr, annomese_riferimento: annoMese, data_lettura: dataLettura, lettura_smc: lettura });
-    }
+    const c = rows[i].split(";");
+    if (c.length < 7) continue;
+    const pdr     = c[0]?.trim();
+    const anno    = parseInt(c[1]?.trim());
+    const data    = c[2]?.trim();
+    const lettura = parseFloat(c[6]?.trim().replace(/^0+/,"") || "0");
+    if (!pdr || !anno || !data || lettura===0) continue;
+    const key = `${pdr}|${data}`;
+    const ex  = byKey.get(key);
+    if (!ex || lettura > ex.lettura_smc)
+      byKey.set(key, { pdr, annomese_riferimento:anno, data_lettura:data, lettura_smc:lettura });
   }
-  return { rows: Array.from(byData.values()).sort((a,b) => a.data_lettura.localeCompare(b.data_lettura)) };
+  const result = Array.from(byKey.values()).sort((a,b)=>a.data_lettura.localeCompare(b.data_lettura));
+  return { rows:result, count:result.length };
 }
 
-// ─── Aggregazioni per i grafici ───────────────────────────────────────────────
+// ─── Aggregazioni ─────────────────────────────────────────────────────────────
 
-function aggregaLuceMensile(misure) {
+function fmtMese(annomese) {
+  const s = String(annomese);
+  return `${MESI_S[parseInt(s.slice(4))-1]} ${s.slice(2,4)}`;
+}
+
+function aggLuceMensile(misure) {
   const map = new Map();
-  for (const m of misure) {
-    const k = m.annomese_riferimento;
-    map.set(k, (map.get(k) || 0) + m.totale_kwh);
-  }
-  return Array.from(map.entries())
-    .sort(([a],[b]) => a - b)
-    .map(([k, v]) => ({ mese: fmtMese(k), kwh: Math.round(v) }));
+  for (const m of misure) map.set(m.annomese_riferimento, (map.get(m.annomese_riferimento)||0)+m.totale_kwh);
+  return Array.from(map.entries()).sort(([a],[b])=>a-b)
+    .map(([k,v]) => ({ mese:fmtMese(k), kwh:Math.round(v) }));
 }
 
-function aggregaGasMensile(letture) {
-  // ordinate per data; per ogni mese prendiamo la lettura più alta (ultima del mese)
-  const byMese = new Map();
-  for (const l of letture) {
-    const k = l.annomese_riferimento;
-    if (!byMese.has(k) || l.lettura_smc > byMese.get(k).lettura_smc) byMese.set(k, l);
-  }
-  const sorted = Array.from(byMese.values()).sort((a,b) => a.annomese_riferimento - b.annomese_riferimento);
-  const result = [];
-  for (let i = 1; i < sorted.length; i++) {
-    const consumo = sorted[i].lettura_smc - sorted[i-1].lettura_smc;
-    if (consumo >= 0 && consumo < 400) {
-      result.push({ mese: fmtMese(sorted[i].annomese_riferimento), smc: Math.round(consumo * 10) / 10 });
-    }
-  }
-  return result;
+function aggGasMensile(letture) {
+  const byM = new Map();
+  for (const l of letture)
+    if (!byM.has(l.annomese_riferimento) || l.lettura_smc > byM.get(l.annomese_riferimento).lettura_smc)
+      byM.set(l.annomese_riferimento, l);
+  const sorted = Array.from(byM.values()).sort((a,b)=>a.annomese_riferimento-b.annomese_riferimento);
+  return sorted.slice(1).map((r,i) => {
+    const diff = r.lettura_smc - sorted[i].lettura_smc;
+    return diff >= 0 && diff < 400 ? { mese:fmtMese(r.annomese_riferimento), smc:Math.round(diff*10)/10 } : null;
+  }).filter(Boolean);
 }
 
-function calcolaCurvaDiCarico(misure) {
-  if (misure.length === 0) return [];
-  const sums   = new Array(96).fill(0);
-  const counts = new Array(96).fill(0);
+// Curva 24h per giorno selezionato + media storica (in Watt)
+function getCurva(misure, selectedDate) {
+  const byDate = {};
+  for (const m of misure) byDate[m.data_lettura] = m.valori_ea;
+  const sums = new Array(96).fill(0), counts = new Array(96).fill(0);
   for (const m of misure) {
-    const ea = m.valori_ea;
-    if (!Array.isArray(ea) || ea.length < 96) continue;
-    for (let k = 0; k < 96; k++) {
-      const v = parseFloat(ea[k]) || 0;
-      if (v > 0) { sums[k] += v; counts[k]++; }
-    }
+    if (!Array.isArray(m.valori_ea)) continue;
+    for (let k=0; k<96; k++) { const v=parseFloat(m.valori_ea[k])||0; if(v>0){sums[k]+=v;counts[k]++;} }
   }
-  // Raggruppa in 24 ore (4 slot ciascuna), media in W (kWh/0.25h → *4 → kW → *1000 → W)
-  return Array.from({ length: 24 }, (_, h) => {
-    let wh = 0;
-    for (let s = 0; s < 4; s++) {
-      const idx = h * 4 + s;
-      wh += counts[idx] > 0 ? sums[idx] / counts[idx] : 0;
+  const ea = byDate[selectedDate];
+  return Array.from({length:24},(_,h) => {
+    let giorno=null, media=0;
+    for (let s=0; s<4; s++) {
+      const k=h*4+s;
+      if (ea) giorno=(giorno||0)+(parseFloat(ea[k])||0);
+      if (counts[k]>0) media+=sums[k]/counts[k];
     }
-    return {
-      ora: `${h.toString().padStart(2,"0")}:00`,
-      watt: Math.round((wh / 4) * 1000 * 10) / 10,  // W medi nell'ora
-    };
+    return { ora:`${h.toString().padStart(2,"0")}:00`,
+      giorno: giorno!==null ? Math.round(giorno*1000) : null,
+      media:  Math.round(media*1000) };
   });
 }
 
-// ─── Sub-componenti grafici ───────────────────────────────────────────────────
+// ─── Icone file ───────────────────────────────────────────────────────────────
 
-const CustomBarTooltip = ({ active, payload, label, unit, color }) => {
-  if (!active || !payload?.length) return null;
+function LuceFileIcon({ size=52, color=C.amber }) {
   return (
-    <div style={{ background:C.surface, border:`1px solid ${color}40`, borderRadius:10, padding:"8px 12px" }}>
-      <p style={{ color:C.textDim, fontSize:10, marginBottom:3 }}>{label}</p>
-      <p style={{ color, fontSize:14, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>
-        {payload[0].value} {unit}
-      </p>
+    <div style={{ position:"relative", width:size, height:size }}>
+      <FileText size={size} color={color} strokeWidth={1.5} />
+      <div style={{ position:"absolute", bottom:"14%", left:"50%", transform:"translateX(-50%)" }}>
+        <Zap size={Math.round(size*.33)} color={color} fill={color} />
+      </div>
     </div>
   );
-};
-
-const CustomLineTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
+}
+function GasFileIcon({ size=52, color=C.sky }) {
   return (
-    <div style={{ background:C.surface, border:`1px solid ${C.amber}40`, borderRadius:10, padding:"8px 12px" }}>
-      <p style={{ color:C.textDim, fontSize:10, marginBottom:3 }}>{label}</p>
-      <p style={{ color:C.amber, fontSize:14, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>
-        {payload[0].value} W
-      </p>
+    <div style={{ position:"relative", width:size, height:size }}>
+      <FileText size={size} color={color} strokeWidth={1.5} />
+      <div style={{ position:"absolute", bottom:"14%", left:"50%", transform:"translateX(-50%)" }}>
+        <Flame size={Math.round(size*.33)} color={color} fill={color} />
+      </div>
     </div>
   );
-};
+}
 
-function BarCard({ title, subtitle, icon, color, dim, borderColor, data, dataKey, unit }) {
-  const max = Math.max(...data.map(d => d[dataKey]), 1);
+// ─── KPI Card ─────────────────────────────────────────────────────────────────
+
+function KpiCard({ label, emoji, value, unit, dateStr, color }) {
+  const d = dateStr ? new Date(dateStr) : null;
+  const dl = d ? `${d.getDate()} ${MESI_L[d.getMonth()]} ${d.getFullYear()}` : "—";
+  return (
+    <div style={{ background:C.surface, border:`1px solid ${color}30`, borderRadius:18, padding:"14px 16px", flex:1 }}>
+      <p style={{ color, fontSize:9, fontWeight:700, letterSpacing:1.3, textTransform:"uppercase", margin:"0 0 10px" }}>{emoji} {label}</p>
+      <p style={{ color:C.text, fontSize:26, fontWeight:800, fontFamily:"'Sora',sans-serif", margin:"0 0 2px", lineHeight:1 }}>
+        {value}<span style={{ fontSize:11, color:C.textMid, fontWeight:400, marginLeft:3 }}>{unit}</span>
+      </p>
+      <p style={{ color:C.textDim, fontSize:9, marginTop:5 }}>{dl}</p>
+    </div>
+  );
+}
+
+// ─── Curva di Carico ──────────────────────────────────────────────────────────
+
+function CurvaGiornaliera({ misure }) {
+  const dates = useMemo(() => [...new Set(misure.map(m=>m.data_lettura))].sort(), [misure]);
+  const [idx, setIdx] = useState(dates.length-1);
+  const selDate = dates[Math.min(idx, dates.length-1)] || null;
+  const curva   = useMemo(() => selDate ? getCurva(misure, selDate) : [], [misure, selDate]);
+  const totKwh  = selDate ? (misure.find(m=>m.data_lettura===selDate)?.totale_kwh ?? 0) : 0;
+
+  const d = selDate ? new Date(selDate) : null;
+  const DOW = ["Dom","Lun","Mar","Mer","Gio","Ven","Sab"];
+  const dl = d ? `${DOW[d.getDay()]} ${d.getDate()} ${MESI_S[d.getMonth()]} '${String(d.getFullYear()).slice(2)}` : "";
+
+  const Tip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    const g = payload.find(p=>p.dataKey==="giorno");
+    const m = payload.find(p=>p.dataKey==="media");
+    return (
+      <div style={{ background:C.surface, border:`1px solid ${C.amberMid}`, borderRadius:10, padding:"8px 12px" }}>
+        <p style={{ color:C.textDim, fontSize:9, marginBottom:4 }}>{label}</p>
+        {g?.value!=null && <p style={{ color:C.amber, fontSize:13, fontWeight:800, margin:"0 0 2px", fontFamily:"'Sora',sans-serif" }}>{g.value} W</p>}
+        <p style={{ color:C.textDim, fontSize:10 }}>Media {m?.value} W</p>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ background:C.surface, border:`1px solid ${C.amberMid}`, borderRadius:20, overflow:"hidden" }}>
+      <div style={{ padding:"16px 18px 0" }}>
+        <p style={{ color:C.amber, fontSize:10, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", margin:"0 0 10px" }}>
+          ⚡ Curva di Carico
+        </p>
+        {/* Nav giorno */}
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
+          <button onClick={()=>setIdx(i=>Math.max(0,i-1))} disabled={idx===0}
+            style={{ background:"none", border:"none", cursor:idx>0?"pointer":"default", padding:"4px 0", lineHeight:0 }}>
+            <ChevronLeft size={20} color={idx>0?C.textMid:C.border2} />
+          </button>
+          <div style={{ textAlign:"center" }}>
+            <p style={{ color:C.text, fontSize:13, fontWeight:700, margin:0 }}>{dl}</p>
+            <p style={{ color:C.amber, fontSize:12, fontWeight:600, margin:"2px 0 0", fontFamily:"'Sora',sans-serif" }}>
+              {totKwh.toFixed(2)} <span style={{ fontSize:9, color:C.textDim, fontWeight:400 }}>kWh totali</span>
+            </p>
+          </div>
+          <button onClick={()=>setIdx(i=>Math.min(dates.length-1,i+1))} disabled={idx===dates.length-1}
+            style={{ background:"none", border:"none", cursor:idx<dates.length-1?"pointer":"default", padding:"4px 0", lineHeight:0 }}>
+            <ChevronRight size={20} color={idx<dates.length-1?C.textMid:C.border2} />
+          </button>
+        </div>
+        {/* Legend */}
+        <div style={{ display:"flex", gap:16, marginBottom:6 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <div style={{ width:14, height:2, background:C.amber, borderRadius:1 }} />
+            <span style={{ color:C.textDim, fontSize:9 }}>Questo giorno</span>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+            {[0,1,2].map(i=><div key={i} style={{ width:4, height:2, background:C.textDim, borderRadius:1 }}/>)}
+            <span style={{ color:C.textDim, fontSize:9, marginLeft:1 }}>Media storica</span>
+          </div>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={130}>
+        <LineChart data={curva} margin={{ top:4, right:16, left:16, bottom:4 }}>
+          <XAxis dataKey="ora" axisLine={false} tickLine={false} tick={{ fill:C.textDim, fontSize:8 }} interval={5} />
+          <YAxis hide />
+          <Tooltip content={<Tip />} />
+          <Line type="natural" dataKey="media" stroke={C.textDim} strokeWidth={1.5}
+            strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+          <Line type="natural" dataKey="giorno" stroke={C.amber} strokeWidth={2.5}
+            dot={false} activeDot={{ r:4, fill:C.amber, stroke:"white", strokeWidth:2 }}
+            connectNulls={false} isAnimationActive={false} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ─── Heatmap ──────────────────────────────────────────────────────────────────
+
+function HeatmapLuce({ misure }) {
+  const scrollRef = useRef();
+
+  const byDate = useMemo(() => {
+    const m = {};
+    for (const r of misure) m[r.data_lettura] = r.totale_kwh;
+    return m;
+  }, [misure]);
+
+  const dates = Object.keys(byDate).sort();
+  if (!dates.length) return null;
+
+  const maxKwh = Math.max(...Object.values(byDate), 0.1);
+  const minKwh = Math.min(...Object.values(byDate));
+  const maxDay = dates.reduce((best, d) => byDate[d] > (byDate[best]||0) ? d : best, dates[0]);
+  const minDay = dates.reduce((best, d) => byDate[d] < (byDate[best]??Infinity) ? d : best, dates[0]);
+
+  // Lunedì precedente la prima data
+  const start = new Date(dates[0]);
+  const firstMon = new Date(start);
+  firstMon.setDate(start.getDate() - ((start.getDay()+6)%7));
+  const end = new Date(dates[dates.length-1]);
+
+  const CELL=11, GAP=3, STEP=CELL+GAP, LEFT=16;
+
+  const weeks = [];
+  const cur = new Date(firstMon);
+  while (cur <= end) {
+    const week = [];
+    for (let d=0; d<7; d++) {
+      const iso = cur.toISOString().slice(0,10);
+      week.push({ date:iso, kwh: byDate[iso]??null });
+      cur.setDate(cur.getDate()+1);
+    }
+    weeks.push(week);
+  }
+
+  // Label mesi
+  const monthLabels = [];
+  weeks.forEach((week,wi) => {
+    const d = new Date(week[0].date);
+    if (d.getDate() <= 7 || wi===0) {
+      const prev = monthLabels[monthLabels.length-1];
+      const prevMese = prev ? new Date(weeks[prev.wi][0].date).getMonth() : -1;
+      if (prevMese !== d.getMonth()) monthLabels.push({ wi, label:MESI_S[d.getMonth()] });
+    }
+  });
+
+  const SVG_W = LEFT + weeks.length*STEP;
+  const SVG_H = 18 + 7*STEP;
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+  }, [weeks.length]);
+
+  return (
+    <div style={{ background:C.surface, border:`1px solid ${C.amberMid}`, borderRadius:20, overflow:"hidden" }}>
+      <div style={{ padding:"16px 18px 8px" }}>
+        <p style={{ color:C.amber, fontSize:10, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", margin:"0 0 2px" }}>
+          ⚡ Heatmap Consumi
+        </p>
+        <p style={{ color:C.textDim, fontSize:10 }}>{dates.length} giorni · intensità = kWh consumati</p>
+      </div>
+      <div ref={scrollRef} style={{ overflowX:"auto", padding:"0 18px 10px", WebkitOverflowScrolling:"touch" }}>
+        <svg width={SVG_W} height={SVG_H} style={{ display:"block" }}>
+          {/* Mesi */}
+          {monthLabels.map((ml,i) => (
+            <text key={i} x={LEFT+ml.wi*STEP} y={10} fill={C.textDim} fontSize={8} fontFamily="DM Sans,sans-serif">{ml.label}</text>
+          ))}
+          {/* Giorni della settimana */}
+          {["L","M","M","G","V","S","D"].map((l,di) => (
+            <text key={di} x={LEFT-3} y={18+di*STEP+CELL-1}
+              fill={C.textDim} fontSize={7} textAnchor="end" fontFamily="DM Sans,sans-serif">{l}</text>
+          ))}
+          {/* Celle */}
+          {weeks.map((week,wi) => week.map((day,di) => {
+            const has = day.kwh !== null;
+            let fill = C.border;
+            if (has) {
+              const pct = (day.kwh - minKwh) / (maxKwh - minKwh + 0.001);
+              fill = `rgba(245,158,11,${(0.12 + pct*0.88).toFixed(2)})`;
+            }
+            const isMax = day.date === maxDay;
+            const isMin = day.date === minDay;
+            return (
+              <rect key={`${wi}-${di}`}
+                x={LEFT+wi*STEP} y={18+di*STEP}
+                width={CELL} height={CELL} rx={2}
+                fill={fill}
+                stroke={isMax ? C.red : isMin ? C.green : "none"}
+                strokeWidth={isMax||isMin ? 1.5 : 0}
+              />
+            );
+          }))}
+        </svg>
+      </div>
+      {/* Scala colori + legenda picchi */}
+      <div style={{ padding:"4px 18px 14px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <span style={{ color:C.textDim, fontSize:9 }}>Basso</span>
+          <div style={{ display:"flex", gap:2 }}>
+            {[0.12,0.33,0.54,0.75,0.96].map((a,i)=>(
+              <div key={i} style={{ width:CELL, height:CELL, borderRadius:2, background:`rgba(245,158,11,${a})` }} />
+            ))}
+          </div>
+          <span style={{ color:C.textDim, fontSize:9 }}>Alto</span>
+        </div>
+        <div style={{ display:"flex", gap:16 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <div style={{ width:CELL, height:CELL, borderRadius:2, border:`1.5px solid ${C.red}`, background:"transparent" }} />
+            <span style={{ color:C.textDim, fontSize:9 }}>Record ({maxDay?.slice(5).split("-").reverse().join("/")})</span>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <div style={{ width:CELL, height:CELL, borderRadius:2, border:`1.5px solid ${C.green}`, background:"transparent" }} />
+            <span style={{ color:C.textDim, fontSize:9 }}>Migliore ({minDay?.slice(5).split("-").reverse().join("/")})</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Bar Card ─────────────────────────────────────────────────────────────────
+
+function BarCard({ title, subtitle, color, borderColor, data, dataKey, unit }) {
+  const max = Math.max(...data.map(d=>d[dataKey]),1);
+  const Tip = ({ active, payload, label }) => {
+    if (!active||!payload?.length) return null;
+    return (
+      <div style={{ background:C.surface, border:`1px solid ${color}40`, borderRadius:10, padding:"8px 12px" }}>
+        <p style={{ color:C.textDim, fontSize:9, marginBottom:3 }}>{label}</p>
+        <p style={{ color, fontSize:13, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>{payload[0].value} {unit}</p>
+      </div>
+    );
+  };
   return (
     <div style={{ background:C.surface, border:`1px solid ${borderColor}`, borderRadius:20, overflow:"hidden" }}>
-      <div style={{ padding:"16px 18px 8px", display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+      <div style={{ padding:"16px 18px 8px", display:"flex", justifyContent:"space-between" }}>
         <div>
-          <p style={{ color, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 3px", textTransform:"uppercase" }}>{icon} {title}</p>
+          <p style={{ color, fontSize:10, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", margin:"0 0 3px" }}>{title}</p>
           <p style={{ color:C.textDim, fontSize:11, margin:0 }}>{subtitle}</p>
         </div>
-        <span style={{ color:C.textDim, fontSize:11, marginTop:4 }}>{unit}</span>
+        <span style={{ color:C.textDim, fontSize:11, alignSelf:"flex-start", marginTop:2 }}>{unit}</span>
       </div>
-      <ResponsiveContainer width="100%" height={140}>
+      <ResponsiveContainer width="100%" height={130}>
         <BarChart data={data} margin={{ top:8, right:16, left:16, bottom:4 }} barCategoryGap="30%">
           <XAxis dataKey="mese" axisLine={false} tickLine={false} tick={{ fill:C.textDim, fontSize:9 }} interval={0} />
-          <YAxis hide domain={[0, max * 1.15]} />
-          <Tooltip content={<CustomBarTooltip unit={unit} color={color} />} cursor={{ fill:`${color}10` }} />
+          <YAxis hide domain={[0,max*1.15]} />
+          <Tooltip content={<Tip />} cursor={{ fill:`${color}10` }} />
           <Bar dataKey={dataKey} radius={[6,6,2,2]} isAnimationActive={false}>
-            {data.map((entry, i) => {
-              const pct = entry[dataKey] / max;
-              const isMax = entry[dataKey] === max;
-              return <Cell key={i} fill={isMax ? color : `${color}${Math.round(pct * 180).toString(16).padStart(2,"0")}`} />;
+            {data.map((entry,i) => {
+              const pct = entry[dataKey]/max;
+              const isMax = entry[dataKey]===max;
+              return <Cell key={i} fill={isMax ? color : `${color}${Math.round(pct*160+30).toString(16).padStart(2,"0")}`} />;
             })}
           </Bar>
         </BarChart>
@@ -204,33 +402,24 @@ function BarCard({ title, subtitle, icon, color, dim, borderColor, data, dataKey
   );
 }
 
-function CurvaCard({ data }) {
+// ─── Card picker per il modal ─────────────────────────────────────────────────
+
+function CsvCard({ label, sub, FileIconComp, color, dim, border, file, preview, error, inputRef, onChange }) {
   return (
-    <div style={{ background:C.surface, border:`1px solid ${C.amberMid}`, borderRadius:20, overflow:"hidden" }}>
-      <div style={{ padding:"16px 18px 8px", display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-        <div>
-          <p style={{ color:C.amber, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 3px", textTransform:"uppercase" }}>⚡ Curva di Carico</p>
-          <p style={{ color:C.textDim, fontSize:11, margin:0 }}>Consumo medio per ora del giorno</p>
-        </div>
-        <span style={{ color:C.textDim, fontSize:11, marginTop:4 }}>W medi</span>
+    <div onClick={() => inputRef.current?.click()}
+      style={{ flex:1, background: file ? dim : "#111", border:`1.5px solid ${file ? color : C.border2}`,
+        borderRadius:20, padding:"22px 12px 18px", cursor:"pointer",
+        display:"flex", flexDirection:"column", alignItems:"center", gap:10, minHeight:168 }}>
+      <div style={{ background:dim, borderRadius:16, padding:14 }}>
+        <FileIconComp size={42} />
       </div>
-      <ResponsiveContainer width="100%" height={130}>
-        <LineChart data={data} margin={{ top:8, right:16, left:16, bottom:4 }}>
-          <XAxis
-            dataKey="ora"
-            axisLine={false} tickLine={false}
-            tick={{ fill:C.textDim, fontSize:8 }}
-            interval={5}
-          />
-          <YAxis hide />
-          <Tooltip content={<CustomLineTooltip />} />
-          <Line
-            type="natural" dataKey="watt" stroke={C.amber} strokeWidth={2}
-            dot={false} activeDot={{ r:4, fill:C.amber, stroke:"white", strokeWidth:1.5 }}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+      <div style={{ textAlign:"center" }}>
+        <p style={{ color:C.text, fontSize:13, fontWeight:700, margin:"0 0 4px" }}>{label}</p>
+        <p style={{ color: error ? C.red : file ? color : C.textDim, fontSize:10, lineHeight:1.4 }}>
+          {error || preview || sub}
+        </p>
+      </div>
+      <input ref={inputRef} type="file" accept=".csv" onChange={onChange} style={{ display:"none" }} />
     </div>
   );
 }
@@ -238,162 +427,98 @@ function CurvaCard({ data }) {
 // ─── Import Modal ─────────────────────────────────────────────────────────────
 
 function ImportModal({ user, onClose, onDone }) {
-  const [luceFile, setLuceFile]   = useState(null);
-  const [gasFile,  setGasFile]    = useState(null);
-  const [lucePreview, setLucePreview] = useState(null); // { count, error }
-  const [gasPreview,  setGasPreview]  = useState(null);
-  const [luceParsed, setLuceParsed]   = useState(null); // rows[]
-  const [gasParsed,  setGasParsed]    = useState(null);
-  const [saving, setSaving]   = useState(false);
-  const [done,   setDone]     = useState(false);
-  const [saveErr, setSaveErr] = useState(null);
-  const luceRef = useRef(); const gasRef = useRef();
+  const luceRef=useRef(), gasRef=useRef();
+  const [lP, setLP]=useState(null), [gP, setGP]=useState(null); // parsed rows
+  const [lPrev,setLPrev]=useState(null), [gPrev,setGPrev]=useState(null);
+  const [lErr, setLErr]=useState(null),  [gErr, setGErr]=useState(null);
+  const [lFile,setLFile]=useState(null), [gFile,setGFile]=useState(null);
+  const [saving,setSaving]=useState(false), [done,setDone]=useState(false), [saveErr,setSaveErr]=useState(null);
 
-  function handleLuceFile(file) {
+  function rdCSV(file, parser, setRows, setPreview, setError) {
     if (!file) return;
-    setLuceFile(file);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const { rows, error } = parseLuceCSV(e.target.result);
-      if (error) { setLucePreview({ error }); setLuceParsed(null); return; }
-      // Raggruppa mesi per preview
-      const mesi = new Set(rows.map(r => r.annomese_riferimento));
-      setLucePreview({ count: rows.length, mesi: mesi.size });
-      setLuceParsed(rows);
+    const r = new FileReader();
+    r.onload = e => {
+      const res = parser(e.target.result);
+      if (res.error) { setError(res.error); setRows(null); return; }
+      setError(null); setRows(res.rows); setPreview(res);
     };
-    reader.readAsText(file);
+    r.readAsText(file);
   }
 
-  function handleGasFile(file) {
-    if (!file) return;
-    setGasFile(file);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const { rows, error } = parseGasCSV(e.target.result);
-      if (error) { setGasPreview({ error }); setGasParsed(null); return; }
-      setGasPreview({ count: rows.length });
-      setGasParsed(rows);
-    };
-    reader.readAsText(file);
-  }
+  function handleLuce(f) { setLFile(f); setLP(null); setLPrev(null); setLErr(null); rdCSV(f, parseLuceCSV, setLP, setLPrev, setLErr); }
+  function handleGas(f)  { setGFile(f); setGP(null); setGPrev(null); setGErr(null); rdCSV(f, parseGasCSV, setGP, setGPrev, setGErr); }
 
-  async function handleSave() {
+  async function save() {
     setSaving(true); setSaveErr(null);
     try {
-      // Salva luce in batch da 20 (i record hanno JSONB grande)
-      if (luceParsed?.length) {
-        const toInsert = luceParsed.map(r => ({ ...r, utente_id: user.id }));
-        for (let i = 0; i < toInsert.length; i += 20) {
-          const chunk = toInsert.slice(i, i + 20);
-          const { error } = await supabase.from("misure_quartorarie")
-            .upsert(chunk, { onConflict: "utente_id,pod,data_lettura" });
-          if (error) throw new Error(`Luce batch ${i}: ${error.message}`);
+      if (lP?.length) {
+        const rows = lP.map(r=>({...r, utente_id:user.id}));
+        for (let i=0;i<rows.length;i+=20) {
+          const {error} = await supabase.from("misure_quartorarie").upsert(rows.slice(i,i+20),{onConflict:"utente_id,pod,data_lettura"});
+          if (error) throw new Error(error.message);
         }
       }
-      // Salva gas
-      if (gasParsed?.length) {
-        const toInsert = gasParsed.map(r => ({ ...r, utente_id: user.id }));
-        const { error } = await supabase.from("letture_gas_arera")
-          .upsert(toInsert, { onConflict: "utente_id,pdr,data_lettura" });
-        if (error) throw new Error(`Gas: ${error.message}`);
+      if (gP?.length) {
+        const {error} = await supabase.from("letture_gas_arera").upsert(gP.map(r=>({...r,utente_id:user.id})),{onConflict:"utente_id,pdr,data_lettura"});
+        if (error) throw new Error(error.message);
       }
-      setDone(true);
-      setTimeout(onDone, 1200);
-    } catch (err) {
-      setSaveErr(err.message);
-    } finally {
-      setSaving(false);
-    }
+      setDone(true); setTimeout(onDone,1000);
+    } catch(e) { setSaveErr(e.message); }
+    finally { setSaving(false); }
   }
 
-  const canSave = !saving && !done && (luceParsed?.length || gasParsed?.length);
+  const canSave = !saving && !done && (lP?.length||gP?.length);
+
+  const lPreviewStr = lPrev ? `${lPrev.count} giorni · ${lPrev.mesi} mesi` : null;
+  const gPreviewStr = gPrev ? `${gPrev.count} letture trovate` : null;
 
   return (
-    <div style={{ position:"fixed", inset:0, background:"#000000cc", zIndex:200, display:"flex", alignItems:"flex-end", justifyContent:"center" }}
-      onClick={(e) => { if (e.target===e.currentTarget && !saving) onClose(); }}>
-      <div style={{ background:C.bg, border:`1px solid ${C.border2}`, borderRadius:"24px 24px 0 0", padding:"24px 20px 44px", width:"100%", maxWidth:430 }}>
-        {/* Header */}
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+    <div style={{ position:"fixed", inset:0, background:"#000c", zIndex:200, display:"flex", alignItems:"flex-end", justifyContent:"center" }}
+      onClick={e => { if(e.target===e.currentTarget && !saving) onClose(); }}>
+      <div style={{ background:C.bg, border:`1px solid ${C.border2}`, borderRadius:"24px 24px 0 0",
+        padding:"24px 20px 44px", width:"100%", maxWidth:430 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:20 }}>
           <div>
-            <p style={{ color:C.textDim, fontSize:10, fontWeight:600, letterSpacing:1.5, textTransform:"uppercase", marginBottom:3 }}>ARERA</p>
-            <h2 style={{ color:C.text, fontSize:20, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>Importa Misure</h2>
+            <p style={{ color:C.textDim, fontSize:10, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", margin:"0 0 3px" }}>ARERA</p>
+            <h2 style={{ color:C.text, fontSize:22, fontWeight:800, fontFamily:"'Sora',sans-serif", margin:0 }}>Importa Misure</h2>
           </div>
-          {!saving && <button onClick={onClose} style={{ background:"none", border:"none", cursor:"pointer", padding:4 }}><X size={20} color={C.textDim} /></button>}
+          {!saving && <button onClick={onClose} style={{ background:C.surface, border:`1px solid ${C.border2}`, borderRadius:10, padding:8, cursor:"pointer", lineHeight:0 }}><X size={16} color={C.textMid} /></button>}
         </div>
 
-        {/* File picker Luce */}
-        <FilePicker
-          label="⚡ CSV Luce (misure quartorarie)"
-          color={C.amber} dim={C.amberDim} border={C.amberMid}
-          file={luceFile}
-          preview={lucePreview}
-          previewText={lucePreview?.error ? lucePreview.error : lucePreview ? `${lucePreview.count} giorni · ${lucePreview.mesi} mesi` : null}
-          inputRef={luceRef}
-          onChange={(e) => handleLuceFile(e.target.files[0])}
-          accept=".csv"
-        />
-
-        <div style={{ height:10 }} />
-
-        {/* File picker Gas */}
-        <FilePicker
-          label="🔥 CSV Gas (letture cumulative)"
-          color={C.sky} dim={C.skyDim} border={C.skyMid}
-          file={gasFile}
-          preview={gasPreview}
-          previewText={gasPreview?.error ? gasPreview.error : gasPreview ? `${gasPreview.count} letture trovate` : null}
-          inputRef={gasRef}
-          onChange={(e) => handleGasFile(e.target.files[0])}
-          accept=".csv"
-        />
+        <div style={{ display:"flex", gap:12, marginBottom:16 }}>
+          <CsvCard label="Carica CSV Luce" sub="(misure quartorarie)"
+            FileIconComp={({size})=><LuceFileIcon size={size} />}
+            color={C.amber} dim={C.amberDim} border={C.amberMid}
+            file={lFile} preview={lPreviewStr} error={lErr}
+            inputRef={luceRef} onChange={e=>handleLuce(e.target.files[0])} />
+          <CsvCard label="Carica CSV Gas" sub="(letture cumulative)"
+            FileIconComp={({size})=><GasFileIcon size={size} />}
+            color={C.sky} dim={C.skyDim} border={C.skyMid}
+            file={gFile} preview={gPreviewStr} error={gErr}
+            inputRef={gasRef} onChange={e=>handleGas(e.target.files[0])} />
+        </div>
 
         {saveErr && (
-          <div style={{ display:"flex", alignItems:"center", gap:8, background:"#1a0505", border:"1px solid #7f1d1d", borderRadius:12, padding:"10px 14px", marginTop:14 }}>
-            <AlertCircle size={14} color="#ef4444" />
-            <span style={{ color:"#ef4444", fontSize:12 }}>{saveErr}</span>
+          <div style={{ display:"flex", gap:8, alignItems:"center", background:"#1a0505", border:"1px solid #7f1d1d", borderRadius:12, padding:"10px 14px", marginBottom:12 }}>
+            <AlertCircle size={14} color={C.red} />
+            <span style={{ color:C.red, fontSize:12 }}>{saveErr}</span>
           </div>
         )}
 
-        {/* CTA */}
-        <button
-          onClick={handleSave}
-          disabled={!canSave}
-          style={{
-            width:"100%", marginTop:20, padding:"16px",
-            background: done ? "#052e1a" : canSave ? C.amber : C.surface,
-            border: `1px solid ${done ? C.green : canSave ? C.amber : C.border2}`,
-            borderRadius:16, cursor: canSave ? "pointer" : "default",
-            display:"flex", alignItems:"center", justifyContent:"center", gap:8,
-          }}>
+        <button onClick={save} disabled={!canSave}
+          style={{ width:"100%", padding:16, borderRadius:16, cursor:canSave?"pointer":"default",
+            background: done?"#052e1a": canSave?C.amber: C.surface,
+            border:`1px solid ${done?C.green: canSave?C.amber: C.border2}`,
+            display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
           {done
-            ? <><CheckCircle size={16} color={C.green} /><span style={{ color:C.green, fontSize:15, fontWeight:700 }}>Salvato!</span></>
+            ? <><CheckCircle size={16} color={C.green}/><span style={{color:C.green,fontSize:15,fontWeight:700}}>Salvato!</span></>
             : saving
-              ? <span style={{ color:C.textMid, fontSize:15 }}>Salvataggio in corso…</span>
-              : <span style={{ color: canSave ? "black" : C.textDim, fontSize:15, fontWeight:700 }}>
-                  {!luceParsed && !gasParsed ? "Seleziona almeno un file" : "Salva su Supabase"}
+              ? <span style={{color:C.textMid,fontSize:14}}>Salvataggio…</span>
+              : <span style={{color:canSave?"black":C.textDim,fontSize:15,fontWeight:700}}>
+                  {canSave ? "Salva su Supabase" : "Seleziona almeno un file"}
                 </span>
           }
         </button>
-      </div>
-    </div>
-  );
-}
-
-function FilePicker({ label, color, dim, border, file, previewText, inputRef, onChange, accept }) {
-  const hasError = previewText && file && !previewText.includes("·") && !previewText.includes("letture");
-  return (
-    <div style={{ background: dim, border:`1px solid ${border}`, borderRadius:16, padding:"14px 16px" }}>
-      <p style={{ color, fontSize:11, fontWeight:700, marginBottom:10 }}>{label}</p>
-      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-        <button
-          onClick={() => inputRef.current?.click()}
-          style={{ background:C.surface, border:`1px solid ${border}`, borderRadius:10, padding:"8px 14px", cursor:"pointer", flexShrink:0 }}>
-          <span style={{ color, fontSize:12, fontWeight:600 }}>{file ? "Cambia" : "Scegli file"}</span>
-        </button>
-        <span style={{ color: hasError ? "#ef4444" : previewText ? color : C.textDim, fontSize:11, flexGrow:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-          {previewText || (file ? file.name : "Nessun file selezionato")}
-        </span>
-        <input ref={inputRef} type="file" accept={accept} onChange={onChange} style={{ display:"none" }} />
       </div>
     </div>
   );
@@ -403,114 +528,121 @@ function FilePicker({ label, color, dim, border, file, previewText, inputRef, on
 
 function EmptyState({ onImport }) {
   return (
-    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", padding:"48px 20px", gap:16, textAlign:"center" }}>
-      <div style={{ background:C.amberDim, borderRadius:20, padding:20 }}>
-        <Activity size={32} color={C.amber} />
+    <div style={{ paddingTop:8 }}>
+      <p style={{ color:C.textDim, fontSize:12, textAlign:"center", lineHeight:1.7, margin:"0 auto 22px", maxWidth:280 }}>
+        Importa i CSV dal portale ARERA per vedere la tua curva di carico, heatmap e statistiche giornaliere.
+      </p>
+      <div style={{ display:"flex", gap:12, marginBottom:18 }}>
+        {[
+          { label:"Carica CSV Luce", sub:"(misure quartorarie)", Ic:({size})=><LuceFileIcon size={size}/>, color:C.amber, dim:C.amberDim, bdr:C.amberMid },
+          { label:"Carica CSV Gas",  sub:"(letture cumulative)", Ic:({size})=><GasFileIcon size={size}/>,  color:C.sky,   dim:C.skyDim,   bdr:C.skyMid  },
+        ].map(({label,sub,Ic,color,dim,bdr}) => (
+          <div key={label} onClick={onImport}
+            style={{ flex:1, background:"#111", border:`1.5px solid ${bdr}`, borderRadius:20,
+              padding:"22px 12px 18px", cursor:"pointer", display:"flex", flexDirection:"column",
+              alignItems:"center", gap:10, minHeight:168 }}>
+            <div style={{ background:dim, borderRadius:16, padding:14 }}><Ic size={42} /></div>
+            <div style={{ textAlign:"center" }}>
+              <p style={{ color:C.text, fontSize:13, fontWeight:700, margin:"0 0 3px" }}>{label}</p>
+              <p style={{ color:C.textDim, fontSize:10 }}>{sub}</p>
+            </div>
+          </div>
+        ))}
       </div>
-      <div>
-        <p style={{ color:C.text, fontSize:17, fontWeight:700, marginBottom:6 }}>Nessun dato ARERA</p>
-        <p style={{ color:C.textDim, fontSize:13, lineHeight:1.6, maxWidth:260 }}>
-          Importa i CSV scaricati dal portale ARERA per vedere la tua curva di carico e i consumi reali.
-        </p>
-      </div>
-      <button onClick={onImport}
-        style={{ background:C.amber, border:"none", borderRadius:14, padding:"14px 28px", cursor:"pointer", display:"flex", alignItems:"center", gap:8 }}>
-        <Upload size={16} color="black" />
-        <span style={{ color:"black", fontSize:14, fontWeight:700 }}>Importa CSV ARERA</span>
-      </button>
-      <p style={{ color:C.textDim, fontSize:11 }}>
+      <p style={{ color:C.textDim, fontSize:10, textAlign:"center" }}>
         Portale ARERA → I tuoi dati → Scarica misure
       </p>
     </div>
   );
 }
 
-// ─── Main Screen ──────────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function ConsumiScreen({ user }) {
-  const [misureLuce, setMisureLuce] = useState([]);
-  const [lettureGas, setLettureGas] = useState([]);
-  const [loading,    setLoading]    = useState(true);
-  const [showImport, setShowImport] = useState(false);
+  const [misure, setMisure] = useState([]);
+  const [letture,setLetture]= useState([]);
+  const [loading,setLoading]= useState(true);
+  const [showImport,setShowImport] = useState(false);
 
-  useEffect(() => { loadData(); }, [user?.id]);
+  useEffect(() => { load(); }, [user?.id]);
 
-  async function loadData() {
+  async function load() {
     setLoading(true);
-    const [{ data: ml }, { data: lg }] = await Promise.all([
-      supabase.from("misure_quartorarie").select("data_lettura,annomese_riferimento,totale_kwh,valori_ea").eq("utente_id", user.id).order("data_lettura"),
-      supabase.from("letture_gas_arera").select("annomese_riferimento,data_lettura,lettura_smc").eq("utente_id", user.id).order("data_lettura"),
+    const [{data:ml},{data:lg}] = await Promise.all([
+      supabase.from("misure_quartorarie").select("data_lettura,annomese_riferimento,totale_kwh,valori_ea").eq("utente_id",user.id).order("data_lettura"),
+      supabase.from("letture_gas_arera").select("annomese_riferimento,data_lettura,lettura_smc").eq("utente_id",user.id).order("data_lettura"),
     ]);
-    setMisureLuce(ml || []);
-    setLettureGas(lg || []);
-    setLoading(false);
+    setMisure(ml||[]); setLetture(lg||[]); setLoading(false);
   }
 
-  const hasData = misureLuce.length > 0 || lettureGas.length > 0;
+  const hasLuce = misure.length > 0;
+  const hasGas  = letture.length > 0;
+  const hasData = hasLuce || hasGas;
 
-  const luceBar = aggregaLuceMensile(misureLuce);
-  const gasBar  = aggregaGasMensile(lettureGas);
-  const curva   = calcolaCurvaDiCarico(misureLuce);
+  const maxDay = useMemo(() => hasLuce ? misure.reduce((b,r)=>r.totale_kwh>(b?.totale_kwh||0)?r:b,null) : null, [misure]);
+  const minDay = useMemo(() => hasLuce ? misure.filter(r=>r.totale_kwh>0).reduce((b,r)=>r.totale_kwh<(b?.totale_kwh??Infinity)?r:b,null) : null, [misure]);
+  const luceBar = useMemo(() => aggLuceMensile(misure), [misure]);
+  const gasBar  = useMemo(() => aggGasMensile(letture), [letture]);
 
   return (
-    <div style={{ paddingTop: 8 }}>
+    <div style={{ paddingTop:8 }}>
       {/* Header */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:20 }}>
         <div>
-          <p style={{ color:C.textDim, fontSize:11, fontWeight:600, letterSpacing:1.5, textTransform:"uppercase", marginBottom:4 }}>ARERA</p>
-          <h1 style={{ color:C.text, fontSize:28, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>Consumi</h1>
+          <p style={{ color:C.textDim, fontSize:11, fontWeight:600, letterSpacing:1.5, textTransform:"uppercase", margin:"0 0 4px" }}>ARERA</p>
+          <h1 style={{ color:C.text, fontSize:28, fontWeight:800, fontFamily:"'Sora',sans-serif", margin:0 }}>Consumi</h1>
         </div>
         {hasData && (
-          <button onClick={() => setShowImport(true)}
-            style={{ background:C.amberDim, border:`1px solid ${C.amberMid}`, borderRadius:12, padding:"8px 14px", cursor:"pointer", display:"flex", alignItems:"center", gap:6, marginTop:8 }}>
-            <Upload size={14} color={C.amber} />
+          <button onClick={()=>setShowImport(true)}
+            style={{ background:C.amberDim, border:`1px solid ${C.amberMid}`, borderRadius:12,
+              padding:"8px 14px", cursor:"pointer", display:"flex", alignItems:"center", gap:6, marginTop:8 }}>
+            <Upload size={14} color={C.amber}/>
             <span style={{ color:C.amber, fontSize:12, fontWeight:700 }}>Aggiorna</span>
           </button>
         )}
       </div>
 
       {loading ? (
-        <p style={{ color:C.textDim, textAlign:"center", padding:40 }}>Caricamento…</p>
+        <p style={{ color:C.textDim, textAlign:"center", padding:48, fontSize:13 }}>Caricamento…</p>
       ) : !hasData ? (
-        <EmptyState onImport={() => setShowImport(true)} />
+        <EmptyState onImport={()=>setShowImport(true)} />
       ) : (
         <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-          {luceBar.length > 0 && (
-            <BarCard
-              title="Luce mensile"
-              subtitle={`${misureLuce.length} giorni di dati ARERA`}
-              icon="⚡"
-              color={C.amber}
-              dim={C.amberDim}
-              borderColor={C.amberMid}
-              data={luceBar}
-              dataKey="kwh"
-              unit="kWh"
-            />
+
+          {/* KPI giorno record / migliore */}
+          {hasLuce && maxDay && minDay && (
+            <div style={{ display:"flex", gap:10 }}>
+              <KpiCard label="Picco consumo" emoji="🔴"
+                value={maxDay.totale_kwh.toFixed(1)} unit="kWh"
+                dateStr={maxDay.data_lettura} color={C.red} />
+              <KpiCard label="Giorno migliore" emoji="🟢"
+                value={minDay.totale_kwh.toFixed(1)} unit="kWh"
+                dateStr={minDay.data_lettura} color={C.green} />
+            </div>
           )}
-          {curva.length > 0 && <CurvaCard data={curva} />}
+
+          {/* Curva di carico con nav */}
+          {hasLuce && <CurvaGiornaliera misure={misure} />}
+
+          {/* Heatmap */}
+          {hasLuce && <HeatmapLuce misure={misure} />}
+
+          {/* Bar mensili luce */}
+          {luceBar.length > 0 && (
+            <BarCard title="⚡ Luce · Mensile" subtitle={`${misure.length} giorni ARERA`}
+              color={C.amber} borderColor={C.amberMid} data={luceBar} dataKey="kwh" unit="kWh" />
+          )}
+
+          {/* Bar mensili gas */}
           {gasBar.length > 0 && (
-            <BarCard
-              title="Gas mensile"
-              subtitle={`${lettureGas.length} letture ARERA`}
-              icon="🔥"
-              color={C.sky}
-              dim={C.skyDim}
-              borderColor={C.skyMid}
-              data={gasBar}
-              dataKey="smc"
-              unit="Smc"
-            />
+            <BarCard title="🔥 Gas · Mensile" subtitle={`${letture.length} letture ARERA`}
+              color={C.sky} borderColor={C.skyMid} data={gasBar} dataKey="smc" unit="Smc" />
           )}
         </div>
       )}
 
       {showImport && (
-        <ImportModal
-          user={user}
-          onClose={() => setShowImport(false)}
-          onDone={() => { setShowImport(false); loadData(); }}
-        />
+        <ImportModal user={user} onClose={()=>setShowImport(false)} onDone={()=>{setShowImport(false);load();}} />
       )}
     </div>
   );
