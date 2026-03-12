@@ -1,9 +1,10 @@
 // src/AppShell.jsx
 import { useState, useRef } from "react";
 import UploadScreen from "./components/UploadScreen";
+import ConsumiScreen from "./components/ConsumiScreen";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import {
-  Zap, Flame, Home, Upload, BarChart2, Settings,
+  Zap, Flame, Home, Upload, BarChart2, Settings, Activity,
   CheckCircle, ChevronRight, Bell, RefreshCw, ArrowUpRight,
   TrendingUp, CloudUpload, Trash2, Pencil, X, Check
 } from "lucide-react";
@@ -621,7 +622,6 @@ function MercatoScreen({ dati }) {
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
           <div style={{ background:dim, borderRadius:8, padding:6 }}>{icon}</div>
           <span style={{ color:color, fontSize:11, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase" }}>{label}</span>
-          {mese && <span style={{ background:dim, color:color, fontSize:10, fontWeight:700, borderRadius:20, padding:"2px 8px" }}>{mese}</span>}
         </div>
         {/* Valore mercato */}
         <p style={{ color:C.text, fontSize:34, fontWeight:800, margin:"0 0 2px", fontFamily:"'Sora',sans-serif" }}>
@@ -908,6 +908,7 @@ export default function AppShell({ user, dati, onSignOut, onRefresh }) {
   const nav = [
     { id:"home",     icon:Home,      label:"Home"     },
     { id:"upload",   icon:Upload,    label:"Bollette" },
+    { id:"consumi",  icon:Activity,  label:"Consumi"  },
     { id:"mercato",  icon:BarChart2, label:"Mercato"  },
     { id:"settings", icon:Settings,  label:"Profilo"  },
   ];
@@ -936,6 +937,7 @@ export default function AppShell({ user, dati, onSignOut, onRefresh }) {
         <div style={{ flex:1, overflowY:"auto", padding:"8px 16px 100px" }}>
           {tab==="home"     && <Dashboard user={user} dati={dati} onGoUpload={() => setTab("upload")} />}
           {tab==="upload"   && <UploadScreen user={user} onBollettaSaved={() => { onRefresh(); setTab("home"); }} />}
+          {tab==="consumi"  && <ConsumiScreen user={user} />}
           {tab==="mercato"  && <MercatoScreen dati={dati} />}
           {tab==="settings" && <SettingsScreen user={user} dati={dati} onSignOut={onSignOut} onRefresh={onRefresh} />}
         </div>
