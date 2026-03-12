@@ -176,11 +176,13 @@ function LuceChart({ data, label }) {
   const getIdx = (clientX) => {
     const rect = wrapRef.current?.getBoundingClientRect();
     if (!rect) return null;
+    const n = data.length;
     const innerW = rect.width - LUCE_M.left - LUCE_M.right;
-    const step = innerW / data.length;
+    // AreaChart con n punti: step = innerW/(n-1), primo punto al margine sx, ultimo al margine dx
+    const step = innerW / (n - 1);
     const x = clientX - rect.left - LUCE_M.left;
-    const idx = Math.floor(x / step);
-    return idx >= 0 && idx < data.length ? idx : null;
+    const idx = Math.max(0, Math.min(n - 1, Math.round(x / step)));
+    return idx;
   };
 
   const onMouseMove  = (e) => setActiveIdx(getIdx(e.clientX));
@@ -190,27 +192,32 @@ function LuceChart({ data, label }) {
 
   const renderOverlay = () => {
     if (activeIdx===null) return null;
+    const n = data.length;
     const w = wrapRef.current?.offsetWidth ?? 320;
     const innerW = w - LUCE_M.left - LUCE_M.right;
-    const step = innerW / data.length;
-    const dotX = LUCE_M.left + activeIdx*step + step/2;
-    const pct = data[activeIdx].kwh / MAX_KWH;
-    const dotY = LUCE_M.top + (LUCE_PH * (1-pct));
+    // step per AreaChart: divide per (n-1) → primo al sx, ultimo al dx
+    const step = innerW / (n - 1);
+    const dotX = LUCE_M.left + activeIdx * step;
+    // Y: domain Recharts = [0, MAX_KWH*1.1]
+    const dotY = LUCE_M.top + LUCE_PH * (1 - data[activeIdx].kwh / (MAX_KWH * 1.1));
     const bW=96, bH=30, bR=15, LIFT=26;
     const bX = Math.max(LUCE_M.left, Math.min(w-LUCE_M.right-bW, dotX-bW/2));
+    // aTip = base della freccia agganciata al balloon (clamped)
     const aTip = Math.max(bX+bR, Math.min(bX+bW-bR, dotX));
     const bY = dotY - LIFT - bH;
-    const lineBottom = LUCE_H - XAXIS_H - 6;
+    const lineBottom = LUCE_M.top + LUCE_PH - 1;
     return (
       <svg style={{ position:"absolute", inset:0, pointerEvents:"none", overflow:"visible" }} width={w} height={LUCE_H}>
-        {/* Linea verticale tratteggiata */}
+        {/* Linea verticale tratteggiata — si ferma prima delle label mesi */}
         <line x1={dotX} y1={dotY+7} x2={dotX} y2={lineBottom}
-          stroke="#f59e0b" strokeWidth={1} strokeDasharray="3 3" strokeOpacity={0.5} />
+          stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="3 3" strokeLinecap="round" />
         {/* Punto attivo — bianco con bordo arancione */}
-        <circle cx={dotX} cy={dotY} r={5} fill="white" stroke="#f59e0b" strokeWidth={2} />
+        <circle cx={dotX} cy={dotY} r={5.5} fill="white" stroke="#f59e0b" strokeWidth={2.5} />
         {/* Tooltip balloon */}
         <rect x={bX} y={bY} width={bW} height={bH} rx={bR} ry={bR} fill="#f59e0b" />
-        <polygon points={`${aTip-5},${bY+bH-2} ${aTip+5},${bY+bH-2} ${aTip},${bY+bH+10}`} fill="#f59e0b" />
+        {/* Freccia: base agganciata al balloon (aTip), punta punta sempre a dotX
+            → per mesi centrali è dritta, per Ott/Dic si inclina verso il punto */}
+        <polygon points={`${aTip-6},${bY+bH-2} ${aTip+6},${bY+bH-2} ${dotX},${bY+bH+10}`} fill="#f59e0b" />
         <text x={bX+bW/2} y={bY+bH/2+5} textAnchor="middle" fill="black" fontWeight="800" fontSize="13" fontFamily="Sora,sans-serif">{data[activeIdx].kwh} kWh</text>
       </svg>
     );
