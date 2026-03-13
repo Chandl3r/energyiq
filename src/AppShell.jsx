@@ -1,5 +1,5 @@
 // src/AppShell.jsx
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import UploadScreen from "./components/UploadScreen";
 import ConsumiScreen from "./components/ConsumiScreen";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
@@ -47,27 +47,48 @@ function calcPct(bollette, benchmark) {
 // Costruisce i dati grafico dai consumi mensili storici estratti dal PDF.
 // Funziona dalla prima bolletta in poi (usa storico_mensile del PDF).
 // Fallback automatico su consumo_fatturato spalmato sui mesi del periodo.
-function buildChartDataFromStorico(bollette, tipo) {
+function buildChartDataFromStorico(bollette, tipo, misureArera) {
   const maxItems = tipo === "LUCE" ? 15 : 16;
   const valueKey = tipo === "LUCE" ? "kwh" : "smc";
-  const mesMap   = new Map(); // "YYYY-MM" → consumo mensile
 
-  // Ordina bollette dalla più vecchia alla più recente
-  // (la più recente sovrascrive per i mesi in sovrapposizione)
+  // ── PRIORITÀ 1: dati ARERA (contatore reale) ────────────────────────────────
+  if (misureArera && misureArera.length > 0) {
+    if (tipo === "LUCE") {
+      const map = new Map();
+      for (const m of misureArera)
+        map.set(m.annomese_riferimento, (map.get(m.annomese_riferimento)||0) + m.totale_kwh);
+      return Array.from(map.entries()).sort(([a],[b])=>a-b).slice(-maxItems)
+        .map(([k,v]) => {
+          const s = String(k);
+          return { mese: meseFmt(`${s.slice(0,4)}-${s.slice(4)}-01`), kwh: Math.round(v), arera: true };
+        });
+    } else {
+      // gas: letture cumulative → differenziale mensile
+      const byM = new Map();
+      for (const l of misureArera)
+        if (!byM.has(l.annomese_riferimento) || l.lettura_smc > byM.get(l.annomese_riferimento).lettura_smc)
+          byM.set(l.annomese_riferimento, l);
+      const sorted = Array.from(byM.values()).sort((a,b)=>a.annomese_riferimento-b.annomese_riferimento);
+      return sorted.slice(1).map((r,i) => {
+        const diff = r.lettura_smc - sorted[i].lettura_smc;
+        if (diff < 0 || diff >= 400) return null;
+        const s = String(r.annomese_riferimento);
+        return { mese: meseFmt(`${s.slice(0,4)}-${s.slice(4)}-01`), smc: Math.round(diff*10)/10, arera: true };
+      }).filter(Boolean).slice(-maxItems);
+    }
+  }
+
+  // ── PRIORITÀ 2: storico da bollette PDF ──────────────────────────────────────
+  const mesMap = new Map();
   const sorted = [...bollette].sort((a,b) =>
     new Date(a.periodo_fine||0) - new Date(b.periodo_fine||0)
   );
-
   sorted.forEach(b => {
-    // ── 1. Storico mensile dal PDF (fonte primaria) ──────────────────────────
     const storico = b.dati_estratti?.storico_mensile ?? [];
     storico.forEach(s => {
-      if (s.mese && s.consumo != null && Number(s.consumo) > 0) {
+      if (s.mese && s.consumo != null && Number(s.consumo) > 0)
         mesMap.set(s.mese, Math.round(Number(s.consumo)));
-      }
     });
-
-    // ── 2. Fallback: consumo_fatturato spalmato sui mesi del periodo ─────────
     if (b.periodo_fine && b.consumo_fatturato) {
       const dFine   = new Date(b.periodo_fine);
       const dInizio = b.periodo_inizio ? new Date(b.periodo_inizio) : dFine;
@@ -75,26 +96,18 @@ function buildChartDataFromStorico(bollette, tipo) {
       let cur = new Date(dInizio.getFullYear(), dInizio.getMonth(), 1);
       const endM = new Date(dFine.getFullYear(), dFine.getMonth(), 1);
       while (cur <= endM) {
-        mesiPeriodo.push(
-          `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,"0")}`
-        );
+        mesiPeriodo.push(`${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,"0")}`);
         cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
       }
-      const consumoMensile = Math.round(
-        Number(b.consumo_fatturato) / Math.max(mesiPeriodo.length, 1)
-      );
-      mesiPeriodo.forEach(key => {
-        if (!mesMap.has(key) && consumoMensile > 0)
-          mesMap.set(key, consumoMensile);
-      });
+      const consumoMensile = Math.round(Number(b.consumo_fatturato) / Math.max(mesiPeriodo.length, 1));
+      mesiPeriodo.forEach(key => { if (!mesMap.has(key) && consumoMensile > 0) mesMap.set(key, consumoMensile); });
     }
   });
-
   return [...mesMap.entries()]
     .filter(([,v]) => v > 0)
     .sort((a,b) => a[0].localeCompare(b[0]))
     .slice(-maxItems)
-    .map(([mese, val]) => ({ mese: meseFmt(mese + "-01"), [valueKey]: val }));
+    .map(([mese, val]) => ({ mese: meseFmt(mese + "-01"), [valueKey]: val, arera: false }));
 }
 
 // ─── Components ───────────────────────────────────────────────────────────────
@@ -169,7 +182,7 @@ const XAXIS_H = 20;
 const LUCE_H = 148, LUCE_M = { top:52, right:16, left:16, bottom:6 };
 const LUCE_PH = LUCE_H - LUCE_M.top - LUCE_M.bottom - XAXIS_H;
 
-function LuceChart({ data, label }) {
+function LuceChart({ data, label, isArera }) {
   const wrapRef = useRef();
   const [activeIdx, setActiveIdx] = useState(null);
   const MAX_KWH = Math.max(...data.map(d=>d.kwh), 1);
@@ -231,7 +244,10 @@ function LuceChart({ data, label }) {
           <p style={{ color:C.amber, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 3px", textTransform:"uppercase" }}>⚡ Luce{label ? ` · ${label}` : ""}</p>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:0 }}>Ultimi {data.length} mesi</p>
         </div>
-        <span style={{ color:C.textDim, fontSize:11 }}>kWh</span>
+        {isArera
+          ? <span style={{ background:"#0a1f0a", border:"1px solid #22c55e40", color:"#22c55e", fontSize:8, fontWeight:700, borderRadius:8, padding:"3px 8px" }}>📡 contatore reale</span>
+          : <span style={{ color:C.textDim, fontSize:11 }}>kWh</span>
+        }
       </div>
       <div ref={wrapRef} style={{ position:"relative", touchAction:"none", userSelect:"none" }}
         onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}
@@ -260,7 +276,7 @@ function LuceChart({ data, label }) {
 const GAS_H = 156, GAS_M = { top:52, right:8, left:8, bottom:6 };
 const GAS_PH = GAS_H - GAS_M.top - GAS_M.bottom - XAXIS_H;
 
-function GasChart({ data, label }) {
+function GasChart({ data, label, isArera }) {
   const wrapRef = useRef();
   const [activeIdx, setActiveIdx] = useState(null);
   const MAX_GAS = Math.max(...data.map(d=>d.smc), 1);
@@ -317,7 +333,10 @@ function GasChart({ data, label }) {
           <p style={{ color:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 3px", textTransform:"uppercase" }}>🔥 Gas{label ? ` · ${label}` : ""}</p>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:0 }}>Ultimi {data.length} mesi</p>
         </div>
-        <span style={{ color:C.textDim, fontSize:11 }}>Smc</span>
+        {isArera
+          ? <span style={{ background:"#0a1f0a", border:"1px solid #22c55e40", color:"#22c55e", fontSize:8, fontWeight:700, borderRadius:8, padding:"3px 8px" }}>📡 contatore reale</span>
+          : <span style={{ color:C.textDim, fontSize:11 }}>Smc</span>
+        }
       </div>
       <div ref={wrapRef} style={{ position:"relative", touchAction:"none", userSelect:"none" }}
         onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}
@@ -336,7 +355,153 @@ function GasChart({ data, label }) {
   );
 }
 
+// ─── Alert Banner (legge da localStorage) ────────────────────────────────────
+
+function AlertsBanner({ userId }) {
+  const [alerts, setAlerts] = useState([]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`energyiq_alerts_${userId}`);
+      if (raw) setAlerts(JSON.parse(raw));
+    } catch { /* noop */ }
+  }, [userId]);
+
+  const dismiss = (id) => {
+    const updated = alerts.filter(a => a.id !== id);
+    setAlerts(updated);
+    try { localStorage.setItem(`energyiq_alerts_${userId}`, JSON.stringify(updated)); } catch { /* noop */ }
+  };
+
+  if (!alerts.length) return null;
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+      {alerts.map(a => (
+        <div key={a.id} style={{
+          background: a.color === "#22c55e" ? "#051a0a" : a.color === "#ef4444" ? "#1a0505" : "#111",
+          border: `1px solid ${a.color}30`,
+          borderRadius:16, padding:"12px 14px",
+          display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:10,
+        }}>
+          <div style={{ display:"flex", alignItems:"flex-start", gap:10, flex:1 }}>
+            <span style={{ fontSize:16, lineHeight:1.4 }}>{a.emoji}</span>
+            <p style={{ color:C.textMid, fontSize:12, lineHeight:1.5, margin:0, flex:1 }}>{a.text}</p>
+          </div>
+          <button onClick={() => dismiss(a.id)} style={{ background:"none", border:"none", cursor:"pointer", padding:"2px 0", lineHeight:0, flexShrink:0 }}>
+            <X size={14} color={C.textDim} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Alert computation (chiamata dopo import CSV) ─────────────────────────────
+// Esportata per essere usata da ConsumiScreen dopo l'upsert
+
+export function computeAndSaveAlerts(userId, misure, gasBar) {
+  const alerts = [];
+
+  if (misure && misure.length > 1) {
+    // Ordina per data
+    const sorted = [...misure].sort((a,b) => a.data_lettura.localeCompare(b.data_lettura));
+    const ultimo  = sorted[sorted.length - 1];
+
+    // Media ultimi 30 giorni (escluso l'ultimo)
+    const thirtyBack = new Date(ultimo.data_lettura);
+    thirtyBack.setDate(thirtyBack.getDate() - 30);
+    const finestra = sorted.filter(m =>
+      m.data_lettura >= thirtyBack.toISOString().slice(0,10) &&
+      m.data_lettura < ultimo.data_lettura
+    );
+    const media30 = finestra.length
+      ? finestra.reduce((s,m) => s+m.totale_kwh, 0) / finestra.length
+      : null;
+
+    if (media30 && media30 > 0) {
+      const delta = ultimo.totale_kwh - media30;
+      const pct   = Math.round((delta / media30) * 100);
+      const d = new Date(ultimo.data_lettura);
+      const dayLabel = `${d.getDate()}/${d.getMonth()+1}`;
+      if (Math.abs(pct) >= 10) {
+        const high = delta > 0;
+        alerts.push({
+          id: "daily_kwh",
+          emoji: high ? "⚡" : "✅",
+          text: `Il ${dayLabel} hai consumato ${ultimo.totale_kwh.toFixed(1)} kWh, ${high ? "+" : ""}${pct}% rispetto alla tua media degli ultimi 30 giorni.${high ? " Era acceso qualcosa di insolito?" : " Ottimo!"}`,
+          color: high ? "#ef4444" : "#22c55e",
+        });
+      }
+    }
+
+    // Picco settimana (ultimi 7 giorni)
+    const sevenBack = new Date(ultimo.data_lettura);
+    sevenBack.setDate(sevenBack.getDate() - 6);
+    const settimana = sorted.filter(m => m.data_lettura >= sevenBack.toISOString().slice(0,10));
+    if (settimana.length >= 3) {
+      const peak = settimana.reduce((b,m) => m.totale_kwh > b.totale_kwh ? m : b);
+      const dp = new Date(peak.data_lettura);
+      const DOW = ["domenica","lunedì","martedì","mercoledì","giovedì","venerdì","sabato"];
+      const mediaSet = settimana.reduce((s,m) => s+m.totale_kwh, 0) / settimana.length;
+      const pctPeak = Math.round(((peak.totale_kwh - mediaSet) / mediaSet) * 100);
+      if (pctPeak >= 40) {
+        alerts.push({
+          id: "week_peak",
+          emoji: "📈",
+          text: `Picco di ${peak.totale_kwh.toFixed(1)} kWh ${DOW[dp.getDay()]} scorso (+${pctPeak}% rispetto alla media settimanale).`,
+          color: "#f59e0b",
+        });
+      }
+    }
+  }
+
+  // Gas: ultima settimana vs precedente (usando gasBar mensile)
+  if (gasBar && gasBar.length >= 2) {
+    const last = gasBar[gasBar.length - 1];
+    const prev = gasBar[gasBar.length - 2];
+    if (prev.smc > 0) {
+      const pct = Math.round(((last.smc - prev.smc) / prev.smc) * 100);
+      if (Math.abs(pct) >= 10) {
+        const high = pct > 0;
+        alerts.push({
+          id: "gas_monthly",
+          emoji: high ? "🔥" : "🌿",
+          text: `A ${last.mese} hai consumato ${last.smc} Smc di gas, ${high ? "+" : ""}${pct}% rispetto a ${prev.mese}.${!high ? " Continua così!" : ""}`,
+          color: high ? "#ef4444" : "#22c55e",
+        });
+      }
+    }
+  }
+
+  if (!alerts.length) return;
+  try {
+    // Prepend ai precedenti non ancora dismissi (max 5 totali)
+    const raw = localStorage.getItem(`energyiq_alerts_${userId}`);
+    const existing = raw ? JSON.parse(raw) : [];
+    const newAlerts = [
+      ...alerts,
+      ...existing.filter(e => !alerts.find(a => a.id === e.id)),
+    ].slice(0, 5);
+    localStorage.setItem(`energyiq_alerts_${userId}`, JSON.stringify(newAlerts));
+  } catch { /* noop */ }
+}
+
 function Dashboard({ user, dati, onGoUpload }) {
+  const [misureArera, setMisureArera] = useState([]);
+  const [lettureGasArera, setLettureGasArera] = useState([]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    (async () => {
+      const [{ data: ml }, { data: lg }] = await Promise.all([
+        supabase.from("misure_quartorarie").select("data_lettura,annomese_riferimento,totale_kwh").eq("utente_id", user.id).order("data_lettura"),
+        supabase.from("letture_gas_arera").select("annomese_riferimento,data_lettura,lettura_smc").eq("utente_id", user.id).order("data_lettura"),
+      ]);
+      setMisureArera(ml || []);
+      setLettureGasArera(lg || []);
+    })();
+  }, [user?.id]);
   if (!dati) {
     return (
       <div style={{ display:"flex", justifyContent:"center", alignItems:"center", height:300 }}>
@@ -514,6 +679,9 @@ function Dashboard({ user, dati, onGoUpload }) {
         ));
       })()}
 
+      {/* Alert banner — dismissibili, calcolati dopo import CSV */}
+      <AlertsBanner userId={user?.id} />
+
       {/* Grafici: prima Luce, poi Gas, ordine fisso */}
       {[
         ...forniture.filter(f => f.tipo_utenza === "LUCE"),
@@ -523,8 +691,10 @@ function Dashboard({ user, dati, onGoUpload }) {
         const bollF     = bollettePerFornitura(f.id);
         const multiLine = forniture.filter(x => x.tipo_utenza === f.tipo_utenza).length > 1;
         const label     = multiLine ? (f.nickname ?? f.fornitore) : null;
+        // Seleziona dati ARERA per tipo utenza
+        const areraData = isLuce ? misureArera : lettureGasArera;
 
-        if (bollF.length === 0) {
+        if (bollF.length === 0 && areraData.length === 0) {
           return (
             <div key={f.id} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20 }}>
               <p style={{ color:isLuce?C.amber:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, margin:"0 0 6px", textTransform:"uppercase" }}>
@@ -537,10 +707,11 @@ function Dashboard({ user, dati, onGoUpload }) {
           );
         }
 
-        const chartData = buildChartDataFromStorico(bollF, f.tipo_utenza);
+        const chartData = buildChartDataFromStorico(bollF, f.tipo_utenza, areraData.length ? areraData : null);
+        const isArera   = chartData.length > 0 && chartData[0]?.arera === true;
         return isLuce
-          ? <LuceChart key={f.id} data={chartData} label={label} />
-          : <GasChart  key={f.id} data={chartData} label={label} />;
+          ? <LuceChart key={f.id} data={chartData} label={label} isArera={isArera} />
+          : <GasChart  key={f.id} data={chartData} label={label} isArera={isArera} />;
       })}
 
 

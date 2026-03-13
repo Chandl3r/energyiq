@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "../lib/supabase";
+import { computeAndSaveAlerts } from "../AppShell";
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, ResponsiveContainer, Tooltip, Cell,
@@ -367,6 +368,100 @@ function HeatmapLuce({ misure }) {
   );
 }
 
+// ─── Profilo Giorno-Tipo ──────────────────────────────────────────────────────
+// Tre curve sovrapposte: media Feriali (Lun-Ven), Sabato, Domenica
+
+function ProfiloGiornoTipo({ misure }) {
+  const data = useMemo(() => {
+    if (!misure.length) return [];
+    // Raggruppa slot per tipo giorno
+    const groups = { feriale:[...Array(96)].map(()=>({s:0,c:0})), sab:[...Array(96)].map(()=>({s:0,c:0})), dom:[...Array(96)].map(()=>({s:0,c:0})) };
+    for (const m of misure) {
+      if (!Array.isArray(m.valori_ea)) continue;
+      const dow = new Date(m.data_lettura).getDay(); // 0=dom,6=sab
+      const grp = dow === 0 ? "dom" : dow === 6 ? "sab" : "feriale";
+      for (let k=0; k<96; k++) {
+        const v = parseFloat(m.valori_ea[k])||0;
+        if (v > 0) { groups[grp][k].s += v; groups[grp][k].c++; }
+      }
+    }
+    // Aggrega in 24h in Watt
+    return Array.from({length:24}, (_,h) => {
+      const toW = (grp) => {
+        let sum = 0;
+        for (let s=0;s<4;s++) { const k=h*4+s; if(groups[grp][k].c>0) sum+=groups[grp][k].s/groups[grp][k].c; }
+        return Math.round(sum*1000);
+      };
+      return { ora:`${h.toString().padStart(2,"0")}:00`, feriale:toW("feriale"), sab:toW("sab"), dom:toW("dom") };
+    });
+  }, [misure]);
+
+  if (!data.length) return null;
+
+  const Tip = ({ active, payload, label }) => {
+    if (!active||!payload?.length) return null;
+    return (
+      <div style={{ background:C.surface, border:`1px solid ${C.amberMid}`, borderRadius:10, padding:"8px 12px" }}>
+        <p style={{ color:C.textDim, fontSize:9, marginBottom:6 }}>{label}</p>
+        {payload.map(p => p.value > 0 && (
+          <p key={p.dataKey} style={{ color:p.color, fontSize:11, fontWeight:700, margin:"0 0 2px", fontFamily:"'Sora',sans-serif" }}>
+            {p.value} W {p.name}
+          </p>
+        ))}
+      </div>
+    );
+  };
+
+  const F1_START=9, F1_END=19, F2A_END=8, F2B_START=20, F3_SAT=7, F3_SUN=23;
+
+  return (
+    <div style={{ background:C.surface, border:`1px solid ${C.amberMid}`, borderRadius:20, overflow:"hidden" }}>
+      <div style={{ padding:"16px 18px 8px" }}>
+        <p style={{ color:C.amber, fontSize:10, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", margin:"0 0 2px" }}>
+          ⚡ Profilo Giorno-Tipo
+        </p>
+        <p style={{ color:C.textDim, fontSize:10, margin:"0 0 10px" }}>Media oraria per tipo di giorno</p>
+        {/* Legenda */}
+        <div style={{ display:"flex", gap:14 }}>
+          {[
+            { key:"feriale", label:"Feriale", color:C.amber },
+            { key:"sab",     label:"Sabato",  color:"#a78bfa" },
+            { key:"dom",     label:"Domenica",color:"#fb923c" },
+          ].map(({key,label,color}) => (
+            <div key={key} style={{ display:"flex", alignItems:"center", gap:5 }}>
+              <div style={{ width:14, height:2, background:color, borderRadius:1 }} />
+              <span style={{ color:C.textDim, fontSize:9 }}>{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={140}>
+        <LineChart data={data} margin={{ top:4, right:16, left:16, bottom:4 }}>
+          <XAxis dataKey="ora" axisLine={false} tickLine={false} tick={{ fill:C.textDim, fontSize:8 }} interval={5} />
+          <YAxis hide />
+          <Tooltip content={<Tip />} />
+          <Line type="natural" dataKey="feriale" name="Feriale" stroke={C.amber}    strokeWidth={2}   dot={false} isAnimationActive={false} />
+          <Line type="natural" dataKey="sab"     name="Sabato"  stroke="#a78bfa"    strokeWidth={1.5} dot={false} isAnimationActive={false} strokeDasharray="5 3" />
+          <Line type="natural" dataKey="dom"     name="Dom."    stroke="#fb923c"    strokeWidth={1.5} dot={false} isAnimationActive={false} strokeDasharray="2 3" />
+        </LineChart>
+      </ResponsiveContainer>
+      {/* Fasce orarie F1/F2/F3 — mini legenda */}
+      <div style={{ display:"flex", gap:10, padding:"4px 18px 14px" }}>
+        {[
+          { label:"F1 08-19 lun-ven", color:"#ef4444" },
+          { label:"F2 ore di punta rimanenti", color:"#f59e0b" },
+          { label:"F3 notte + weekend", color:"#22c55e" },
+        ].map(({label,color}) => (
+          <div key={label} style={{ display:"flex", alignItems:"center", gap:4 }}>
+            <div style={{ width:6, height:6, borderRadius:"50%", background:color, flexShrink:0 }} />
+            <span style={{ color:C.textDim, fontSize:8 }}>{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Bar Card ─────────────────────────────────────────────────────────────────
 
 function BarCard({ title, subtitle, color, borderColor, data, dataKey, unit }) {
@@ -469,7 +564,18 @@ function ImportModal({ user, onClose, onDone }) {
         const {error} = await supabase.from("letture_gas_arera").upsert(gP.map(r=>({...r,utente_id:user.id})),{onConflict:"utente_id,pdr,data_lettura"});
         if (error) throw new Error(error.message);
       }
-      setDone(true); setTimeout(onDone,1000);
+      setDone(true);
+      // Ricarica dati ARERA per calcolo alert
+      const [{data:allMisure}] = await Promise.all([
+        supabase.from("misure_quartorarie").select("data_lettura,totale_kwh").eq("utente_id",user.id).order("data_lettura"),
+      ]);
+      const [{data:allGas}] = await Promise.all([
+        supabase.from("letture_gas_arera").select("annomese_riferimento,data_lettura,lettura_smc").eq("utente_id",user.id).order("data_lettura"),
+      ]);
+      // gasBar per alert gas
+      const gb = aggGasMensile(allGas || []);
+      computeAndSaveAlerts(user.id, allMisure || [], gb);
+      setTimeout(onDone,1000);
     } catch(e) { setSaveErr(e.message); }
     finally { setSaving(false); }
   }
@@ -744,14 +850,11 @@ export default function ConsumiScreen({ user }) {
           {/* Curva di carico con nav */}
           {hasLuce && <CurvaGiornaliera misure={misure} />}
 
+          {/* Profilo giorno-tipo Lun/Sab/Dom */}
+          {hasLuce && <ProfiloGiornoTipo misure={misure} />}
+
           {/* Heatmap */}
           {hasLuce && <HeatmapLuce misure={misure} />}
-
-          {/* Bar mensili luce */}
-          {luceBar.length > 0 && (
-            <BarCard title="⚡ Luce · Mensile" subtitle={`${misure.length} giorni ARERA`}
-              color={C.amber} borderColor={C.amberMid} data={luceBar} dataKey="kwh" unit="kWh" />
-          )}
 
           {/* Gas: KPI + confronto mensile + bar */}
           {gasBar.length > 0 && (
@@ -765,8 +868,6 @@ export default function ConsumiScreen({ user }) {
                   meseLabel={minMeseGas.mese} color={C.green} />
               </div>
               <GasConfronto gasBar={gasBar} />
-              <BarCard title="🔥 Gas · Mensile" subtitle={`${letture.length} letture ARERA`}
-                color={C.sky} borderColor={C.skyMid} data={gasBar} dataKey="smc" unit="Smc" />
             </>
           )}
         </div>
