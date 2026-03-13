@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "../lib/supabase";
-import { computeAndSaveAlerts } from "../AppShell";
+import { computeAndSaveAlerts } from "../lib/alerts";
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, ResponsiveContainer, Tooltip, Cell,
@@ -565,17 +565,13 @@ function ImportModal({ user, onClose, onDone }) {
         if (error) throw new Error(error.message);
       }
       setDone(true);
-      // Ricarica dati ARERA per calcolo alert
-      const [{data:allMisure}] = await Promise.all([
-        supabase.from("misure_quartorarie").select("data_lettura,totale_kwh").eq("utente_id",user.id).order("data_lettura"),
+      // Ricarica tutto per calcolo alert
+      const [{ data: allMisure }, { data: allGas }] = await Promise.all([
+        supabase.from("misure_quartorarie").select("data_lettura,totale_kwh").eq("utente_id", user.id).order("data_lettura"),
+        supabase.from("letture_gas_arera").select("annomese_riferimento,data_lettura,lettura_smc").eq("utente_id", user.id).order("data_lettura"),
       ]);
-      const [{data:allGas}] = await Promise.all([
-        supabase.from("letture_gas_arera").select("annomese_riferimento,data_lettura,lettura_smc").eq("utente_id",user.id).order("data_lettura"),
-      ]);
-      // gasBar per alert gas
-      const gb = aggGasMensile(allGas || []);
-      computeAndSaveAlerts(user.id, allMisure || [], gb);
-      setTimeout(onDone,1000);
+      computeAndSaveAlerts(user.id, allMisure || [], allGas || []);
+      setTimeout(onDone, 1000);
     } catch(e) { setSaveErr(e.message); }
     finally { setSaving(false); }
   }

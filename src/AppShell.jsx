@@ -8,6 +8,7 @@ import {
   CheckCircle, ChevronRight, Bell, RefreshCw, ArrowUpRight,
   TrendingUp, CloudUpload, Trash2, Pencil, X, Check
 } from "lucide-react";
+import { computeAndSaveAlerts } from "./lib/alerts";
 import { supabase } from "./lib/supabase";
 
 const C = {
@@ -400,93 +401,6 @@ function AlertsBanner({ userId }) {
 // ─── Alert computation (chiamata dopo import CSV) ─────────────────────────────
 // Esportata per essere usata da ConsumiScreen dopo l'upsert
 
-export function computeAndSaveAlerts(userId, misure, gasBar) {
-  const alerts = [];
-
-  if (misure && misure.length > 1) {
-    // Ordina per data
-    const sorted = [...misure].sort((a,b) => a.data_lettura.localeCompare(b.data_lettura));
-    const ultimo  = sorted[sorted.length - 1];
-
-    // Media ultimi 30 giorni (escluso l'ultimo)
-    const thirtyBack = new Date(ultimo.data_lettura);
-    thirtyBack.setDate(thirtyBack.getDate() - 30);
-    const finestra = sorted.filter(m =>
-      m.data_lettura >= thirtyBack.toISOString().slice(0,10) &&
-      m.data_lettura < ultimo.data_lettura
-    );
-    const media30 = finestra.length
-      ? finestra.reduce((s,m) => s+m.totale_kwh, 0) / finestra.length
-      : null;
-
-    if (media30 && media30 > 0) {
-      const delta = ultimo.totale_kwh - media30;
-      const pct   = Math.round((delta / media30) * 100);
-      const d = new Date(ultimo.data_lettura);
-      const dayLabel = `${d.getDate()}/${d.getMonth()+1}`;
-      if (Math.abs(pct) >= 10) {
-        const high = delta > 0;
-        alerts.push({
-          id: "daily_kwh",
-          emoji: high ? "⚡" : "✅",
-          text: `Il ${dayLabel} hai consumato ${ultimo.totale_kwh.toFixed(1)} kWh, ${high ? "+" : ""}${pct}% rispetto alla tua media degli ultimi 30 giorni.${high ? " Era acceso qualcosa di insolito?" : " Ottimo!"}`,
-          color: high ? "#ef4444" : "#22c55e",
-        });
-      }
-    }
-
-    // Picco settimana (ultimi 7 giorni)
-    const sevenBack = new Date(ultimo.data_lettura);
-    sevenBack.setDate(sevenBack.getDate() - 6);
-    const settimana = sorted.filter(m => m.data_lettura >= sevenBack.toISOString().slice(0,10));
-    if (settimana.length >= 3) {
-      const peak = settimana.reduce((b,m) => m.totale_kwh > b.totale_kwh ? m : b);
-      const dp = new Date(peak.data_lettura);
-      const DOW = ["domenica","lunedì","martedì","mercoledì","giovedì","venerdì","sabato"];
-      const mediaSet = settimana.reduce((s,m) => s+m.totale_kwh, 0) / settimana.length;
-      const pctPeak = Math.round(((peak.totale_kwh - mediaSet) / mediaSet) * 100);
-      if (pctPeak >= 40) {
-        alerts.push({
-          id: "week_peak",
-          emoji: "📈",
-          text: `Picco di ${peak.totale_kwh.toFixed(1)} kWh ${DOW[dp.getDay()]} scorso (+${pctPeak}% rispetto alla media settimanale).`,
-          color: "#f59e0b",
-        });
-      }
-    }
-  }
-
-  // Gas: ultima settimana vs precedente (usando gasBar mensile)
-  if (gasBar && gasBar.length >= 2) {
-    const last = gasBar[gasBar.length - 1];
-    const prev = gasBar[gasBar.length - 2];
-    if (prev.smc > 0) {
-      const pct = Math.round(((last.smc - prev.smc) / prev.smc) * 100);
-      if (Math.abs(pct) >= 10) {
-        const high = pct > 0;
-        alerts.push({
-          id: "gas_monthly",
-          emoji: high ? "🔥" : "🌿",
-          text: `A ${last.mese} hai consumato ${last.smc} Smc di gas, ${high ? "+" : ""}${pct}% rispetto a ${prev.mese}.${!high ? " Continua così!" : ""}`,
-          color: high ? "#ef4444" : "#22c55e",
-        });
-      }
-    }
-  }
-
-  if (!alerts.length) return;
-  try {
-    // Prepend ai precedenti non ancora dismissi (max 5 totali)
-    const raw = localStorage.getItem(`energyiq_alerts_${userId}`);
-    const existing = raw ? JSON.parse(raw) : [];
-    const newAlerts = [
-      ...alerts,
-      ...existing.filter(e => !alerts.find(a => a.id === e.id)),
-    ].slice(0, 5);
-    localStorage.setItem(`energyiq_alerts_${userId}`, JSON.stringify(newAlerts));
-  } catch { /* noop */ }
-}
-
 function Dashboard({ user, dati, onGoUpload }) {
   const [misureArera, setMisureArera] = useState([]);
   const [lettureGasArera, setLettureGasArera] = useState([]);
@@ -498,8 +412,12 @@ function Dashboard({ user, dati, onGoUpload }) {
         supabase.from("misure_quartorarie").select("data_lettura,annomese_riferimento,totale_kwh").eq("utente_id", user.id).order("data_lettura"),
         supabase.from("letture_gas_arera").select("annomese_riferimento,data_lettura,lettura_smc").eq("utente_id", user.id).order("data_lettura"),
       ]);
-      setMisureArera(ml || []);
-      setLettureGasArera(lg || []);
+      const misure  = ml || [];
+      const letture = lg || [];
+      setMisureArera(misure);
+      setLettureGasArera(letture);
+      // Calcola alert ogni volta che la Home si monta (dati freschi da DB)
+      computeAndSaveAlerts(user.id, misure, letture);
     })();
   }, [user?.id]);
   if (!dati) {
