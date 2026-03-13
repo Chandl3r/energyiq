@@ -6,7 +6,8 @@ import {
 } from "recharts";
 import {
   Upload, X, CheckCircle, AlertCircle, Zap, Flame,
-  ChevronLeft, ChevronRight, FileText,
+  ChevronLeft, ChevronRight, File,
+  TrendingUp, TrendingDown, Minus,
 } from "lucide-react";
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
@@ -126,20 +127,20 @@ function getCurva(misure, selectedDate) {
 
 function LuceFileIcon({ size=52, color=C.amber }) {
   return (
-    <div style={{ position:"relative", width:size, height:size }}>
-      <FileText size={size} color={color} strokeWidth={1.5} />
-      <div style={{ position:"absolute", bottom:"14%", left:"50%", transform:"translateX(-50%)" }}>
-        <Zap size={Math.round(size*.33)} color={color} fill={color} />
+    <div style={{ position:"relative", width:size, height:size, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <File size={size} color={color} strokeWidth={1.5} />
+      <div style={{ position:"absolute", top:"52%", left:"50%", transform:"translate(-50%,-50%)" }}>
+        <Zap size={Math.round(size*.36)} color={color} fill={color} />
       </div>
     </div>
   );
 }
 function GasFileIcon({ size=52, color=C.sky }) {
   return (
-    <div style={{ position:"relative", width:size, height:size }}>
-      <FileText size={size} color={color} strokeWidth={1.5} />
-      <div style={{ position:"absolute", bottom:"14%", left:"50%", transform:"translateX(-50%)" }}>
-        <Flame size={Math.round(size*.33)} color={color} fill={color} />
+    <div style={{ position:"relative", width:size, height:size, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <File size={size} color={color} strokeWidth={1.5} />
+      <div style={{ position:"absolute", top:"52%", left:"50%", transform:"translate(-50%,-50%)" }}>
+        <Flame size={Math.round(size*.36)} color={color} fill={color} />
       </div>
     </div>
   );
@@ -534,6 +535,79 @@ function ImportModal({ user, onClose, onDone }) {
   );
 }
 
+// ─── Gas: confronto ultimo mese vs media ultimi 3 ────────────────────────────
+
+function GasConfronto({ gasBar }) {
+  if (gasBar.length < 2) return null;
+
+  const ultimo   = gasBar[gasBar.length - 1];
+  const prev3    = gasBar.slice(-4, -1); // fino a 3 mesi prima dell'ultimo
+  if (prev3.length === 0) return null;
+
+  const media3   = prev3.reduce((s,r) => s + r.smc, 0) / prev3.length;
+  const delta    = ultimo.smc - media3;
+  const deltaPct = Math.round((delta / media3) * 100);
+  const positive = delta > 0; // più consumo = negativo per l'utente
+  const neutral  = Math.abs(deltaPct) < 3;
+
+  const Icon  = neutral ? Minus : positive ? TrendingUp : TrendingDown;
+  const color = neutral ? C.textMid : positive ? C.red : C.green;
+  const label = neutral
+    ? "In linea con la media"
+    : positive
+      ? `${Math.abs(deltaPct)}% più del solito`
+      : `${Math.abs(deltaPct)}% meno del solito`;
+  const sublabel = `vs media ${prev3.map(r=>r.mese).join(", ")}`;
+
+  return (
+    <div style={{ background:C.surface, border:`1px solid ${C.skyMid}`, borderRadius:20, padding:"18px 20px" }}>
+      <p style={{ color:C.sky, fontSize:10, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", margin:"0 0 14px" }}>
+        🔥 Gas · Confronto mensile
+      </p>
+      <div style={{ display:"flex", alignItems:"center", gap:16 }}>
+        {/* Numero grande */}
+        <div>
+          <p style={{ color:C.text, fontSize:30, fontWeight:800, fontFamily:"'Sora',sans-serif", margin:0, lineHeight:1 }}>
+            {ultimo.smc}<span style={{ fontSize:12, color:C.textMid, fontWeight:400, marginLeft:4 }}>Smc</span>
+          </p>
+          <p style={{ color:C.textDim, fontSize:10, margin:"4px 0 0" }}>{ultimo.mese} (ultimo mese)</p>
+        </div>
+        {/* Freccia e percentuale */}
+        <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:6, background:`${color}15`, border:`1px solid ${color}30`, borderRadius:12, padding:"6px 12px" }}>
+            <Icon size={16} color={color} strokeWidth={2.5} />
+            <span style={{ color, fontSize:15, fontWeight:800, fontFamily:"'Sora',sans-serif" }}>
+              {neutral ? "—" : `${positive ? "+" : ""}${deltaPct}%`}
+            </span>
+          </div>
+          <p style={{ color, fontSize:11, fontWeight:600, margin:0 }}>{label}</p>
+          <p style={{ color:C.textDim, fontSize:9, margin:0, textAlign:"right" }}>{sublabel}</p>
+        </div>
+      </div>
+      {/* Mini bar confronto */}
+      <div style={{ marginTop:14, borderTop:`1px solid ${C.border}`, paddingTop:12 }}>
+        <div style={{ display:"flex", gap:6, alignItems:"flex-end", height:32 }}>
+          {[...prev3, ultimo].map((r, i) => {
+            const maxS = Math.max(...[...prev3, ultimo].map(x=>x.smc), 1);
+            const pct  = r.smc / maxS;
+            const isLast = i === prev3.length;
+            return (
+              <div key={i} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
+                <div style={{ width:"100%", borderRadius:"4px 4px 2px 2px",
+                  height:`${Math.round(pct*28)+4}px`,
+                  background: isLast ? C.sky : `${C.sky}40`,
+                  border: isLast ? `1px solid ${C.sky}` : "none",
+                }} />
+                <span style={{ color: isLast ? C.sky : C.textDim, fontSize:8, fontWeight: isLast ? 700:400 }}>{r.mese}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Istruzioni ARERA ─────────────────────────────────────────────────────────
 
 function AreraSteps() {
@@ -679,7 +753,7 @@ export default function ConsumiScreen({ user }) {
               color={C.amber} borderColor={C.amberMid} data={luceBar} dataKey="kwh" unit="kWh" />
           )}
 
-          {/* Bar mensili gas + KPI mese record/migliore */}
+          {/* Gas: KPI + confronto mensile + bar */}
           {gasBar.length > 0 && (
             <>
               <div style={{ display:"flex", gap:10 }}>
@@ -690,6 +764,7 @@ export default function ConsumiScreen({ user }) {
                   value={minMeseGas.smc} unit="Smc"
                   meseLabel={minMeseGas.mese} color={C.green} />
               </div>
+              <GasConfronto gasBar={gasBar} />
               <BarCard title="🔥 Gas · Mensile" subtitle={`${letture.length} letture ARERA`}
                 color={C.sky} borderColor={C.skyMid} data={gasBar} dataKey="smc" unit="Smc" />
             </>
