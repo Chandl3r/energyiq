@@ -147,9 +147,13 @@ function GasFileIcon({ size=52, color=C.sky }) {
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
 
-function KpiCard({ label, emoji, value, unit, dateStr, color }) {
-  const d = dateStr ? new Date(dateStr) : null;
-  const dl = d ? `${d.getDate()} ${MESI_L[d.getMonth()]} ${d.getFullYear()}` : "—";
+// dateStr → "12 Marzo 2025" | meseLabel → già formattato (es. "Nov 25")
+function KpiCard({ label, emoji, value, unit, dateStr, meseLabel, color }) {
+  let dl = meseLabel || "—";
+  if (!meseLabel && dateStr) {
+    const d = new Date(dateStr);
+    dl = `${d.getDate()} ${MESI_L[d.getMonth()]} ${d.getFullYear()}`;
+  }
   return (
     <div style={{ background:C.surface, border:`1px solid ${color}30`, borderRadius:18, padding:"14px 16px", flex:1 }}>
       <p style={{ color, fontSize:9, fontWeight:700, letterSpacing:1.3, textTransform:"uppercase", margin:"0 0 10px" }}>{emoji} {label}</p>
@@ -377,12 +381,14 @@ function BarCard({ title, subtitle, color, borderColor, data, dataKey, unit }) {
   };
   return (
     <div style={{ background:C.surface, border:`1px solid ${borderColor}`, borderRadius:20, overflow:"hidden" }}>
-      <div style={{ padding:"16px 18px 8px", display:"flex", justifyContent:"space-between" }}>
-        <div>
-          <p style={{ color, fontSize:10, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", margin:"0 0 3px" }}>{title}</p>
-          <p style={{ color:C.textDim, fontSize:11, margin:0 }}>{subtitle}</p>
+      <div style={{ padding:"16px 18px 8px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:4 }}>
+          <p style={{ color, fontSize:10, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", margin:0 }}>{title}</p>
+          <span style={{ background:`${color}18`, border:`1px solid ${color}30`, color, fontSize:8, fontWeight:700, borderRadius:6, padding:"2px 7px", letterSpacing:0.5, whiteSpace:"nowrap" }}>
+            📡 contatore reale
+          </span>
         </div>
-        <span style={{ color:C.textDim, fontSize:11, alignSelf:"flex-start", marginTop:2 }}>{unit}</span>
+        <p style={{ color:C.textDim, fontSize:10, margin:0 }}>{subtitle} · più precisi delle bollette</p>
       </div>
       <ResponsiveContainer width="100%" height={130}>
         <BarChart data={data} margin={{ top:8, right:16, left:16, bottom:4 }} barCategoryGap="30%">
@@ -485,7 +491,7 @@ function ImportModal({ user, onClose, onDone }) {
           {!saving && <button onClick={onClose} style={{ background:C.surface, border:`1px solid ${C.border2}`, borderRadius:10, padding:8, cursor:"pointer", lineHeight:0 }}><X size={16} color={C.textMid} /></button>}
         </div>
 
-        <div style={{ display:"flex", gap:12, marginBottom:16 }}>
+        <div style={{ display:"flex", gap:12, marginBottom:12 }}>
           <CsvCard label="Carica CSV Luce" sub="(misure quartorarie)"
             FileIconComp={({size})=><LuceFileIcon size={size} />}
             color={C.amber} dim={C.amberDim} border={C.amberMid}
@@ -497,6 +503,10 @@ function ImportModal({ user, onClose, onDone }) {
             file={gFile} preview={gPreviewStr} error={gErr}
             inputRef={gasRef} onChange={e=>handleGas(e.target.files[0])} />
         </div>
+
+        {/* Istruzioni accordion */}
+        <AreraSteps />
+        <div style={{ height:12 }} />
 
         {saveErr && (
           <div style={{ display:"flex", gap:8, alignItems:"center", background:"#1a0505", border:"1px solid #7f1d1d", borderRadius:12, padding:"10px 14px", marginBottom:12 }}>
@@ -524,15 +534,48 @@ function ImportModal({ user, onClose, onDone }) {
   );
 }
 
+// ─── Istruzioni ARERA ─────────────────────────────────────────────────────────
+
+function AreraSteps() {
+  const steps = [
+    { n:"1", text:"Vai su consumienergia.it e accedi con SPID o CIE" },
+    { n:"2", text:'Seleziona l\'utenza dal menu a tendina in alto' },
+    { n:"3", text:'Clicca su "Scarica Letture" e salva il CSV' },
+    { n:"4", text:"Ripeti per luce e gas (sono due file separati)" },
+  ];
+  return (
+    <div style={{ background:"#0e0e0e", border:`1px solid ${C.border2}`, borderRadius:16, padding:"14px 16px", marginTop:14 }}>
+      <p style={{ color:C.textDim, fontSize:10, fontWeight:700, letterSpacing:1.2, textTransform:"uppercase", margin:"0 0 12px" }}>
+        📥 Come scaricare i CSV
+      </p>
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {steps.map(({ n, text }) => (
+          <div key={n} style={{ display:"flex", alignItems:"flex-start", gap:10 }}>
+            <div style={{ width:20, height:20, borderRadius:"50%", background:C.amberDim, border:`1px solid ${C.amberMid}`,
+              display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>
+              <span style={{ color:C.amber, fontSize:9, fontWeight:800 }}>{n}</span>
+            </div>
+            <p style={{ color:C.textMid, fontSize:12, lineHeight:1.5, margin:0 }}>{text}</p>
+          </div>
+        ))}
+      </div>
+      <p style={{ color:C.textDim, fontSize:10, marginTop:12, paddingTop:10, borderTop:`1px solid ${C.border}` }}>
+        🔗 <span style={{ color:C.sky }}>consumienergia.it</span> → area riservata
+      </p>
+    </div>
+  );
+}
+
 // ─── Empty State ──────────────────────────────────────────────────────────────
 
 function EmptyState({ onImport }) {
   return (
     <div style={{ paddingTop:8 }}>
-      <p style={{ color:C.textDim, fontSize:12, textAlign:"center", lineHeight:1.7, margin:"0 auto 22px", maxWidth:280 }}>
-        Importa i CSV dal portale ARERA per vedere la tua curva di carico, heatmap e statistiche giornaliere.
+      <p style={{ color:C.textDim, fontSize:12, textAlign:"center", lineHeight:1.7, margin:"0 auto 22px", maxWidth:300 }}>
+        Importa i CSV dal portale ARERA per vedere curva di carico, heatmap e statistiche giornaliere che nessun fornitore ti mostra.
       </p>
-      <div style={{ display:"flex", gap:12, marginBottom:18 }}>
+      {/* Card cliccabili */}
+      <div style={{ display:"flex", gap:12, marginBottom:4 }}>
         {[
           { label:"Carica CSV Luce", sub:"(misure quartorarie)", Ic:({size})=><LuceFileIcon size={size}/>, color:C.amber, dim:C.amberDim, bdr:C.amberMid },
           { label:"Carica CSV Gas",  sub:"(letture cumulative)", Ic:({size})=><GasFileIcon size={size}/>,  color:C.sky,   dim:C.skyDim,   bdr:C.skyMid  },
@@ -549,9 +592,8 @@ function EmptyState({ onImport }) {
           </div>
         ))}
       </div>
-      <p style={{ color:C.textDim, fontSize:10, textAlign:"center" }}>
-        Portale ARERA → I tuoi dati → Scarica misure
-      </p>
+      {/* Istruzioni */}
+      <AreraSteps />
     </div>
   );
 }
@@ -583,6 +625,10 @@ export default function ConsumiScreen({ user }) {
   const minDay = useMemo(() => hasLuce ? misure.filter(r=>r.totale_kwh>0).reduce((b,r)=>r.totale_kwh<(b?.totale_kwh??Infinity)?r:b,null) : null, [misure]);
   const luceBar = useMemo(() => aggLuceMensile(misure), [misure]);
   const gasBar  = useMemo(() => aggGasMensile(letture), [letture]);
+
+  // Gas KPI — mese con maggior e minor consumo
+  const maxMeseGas = useMemo(() => gasBar.length ? gasBar.reduce((b,r)=>r.smc>b.smc?r:b) : null, [gasBar]);
+  const minMeseGas = useMemo(() => gasBar.length ? gasBar.reduce((b,r)=>r.smc<b.smc?r:b) : null, [gasBar]);
 
   return (
     <div style={{ paddingTop:8 }}>
@@ -633,10 +679,20 @@ export default function ConsumiScreen({ user }) {
               color={C.amber} borderColor={C.amberMid} data={luceBar} dataKey="kwh" unit="kWh" />
           )}
 
-          {/* Bar mensili gas */}
+          {/* Bar mensili gas + KPI mese record/migliore */}
           {gasBar.length > 0 && (
-            <BarCard title="🔥 Gas · Mensile" subtitle={`${letture.length} letture ARERA`}
-              color={C.sky} borderColor={C.skyMid} data={gasBar} dataKey="smc" unit="Smc" />
+            <>
+              <div style={{ display:"flex", gap:10 }}>
+                <KpiCard label="Mese record" emoji="🔴"
+                  value={maxMeseGas.smc} unit="Smc"
+                  meseLabel={maxMeseGas.mese} color={C.red} />
+                <KpiCard label="Mese più sobrio" emoji="🟢"
+                  value={minMeseGas.smc} unit="Smc"
+                  meseLabel={minMeseGas.mese} color={C.green} />
+              </div>
+              <BarCard title="🔥 Gas · Mensile" subtitle={`${letture.length} letture ARERA`}
+                color={C.sky} borderColor={C.skyMid} data={gasBar} dataKey="smc" unit="Smc" />
+            </>
           )}
         </div>
       )}
