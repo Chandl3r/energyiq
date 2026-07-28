@@ -1,0 +1,21 @@
+{
+  "appId": "com.energyiq.app",
+  "appName": "EnergyIQ",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1200,
+      "backgroundColor": "#080808",
+      "showSpinner": false,
+      "androidSplashResourceName": "splash"
+    },
+    "StatusBar": {
+      "style": "Light",
+      "backgroundColor": "#080808",
+      "overlaysWebView": false
+    }
+  }
+}
