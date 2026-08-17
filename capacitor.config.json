@@ -13,7 +13,7 @@
       "androidSplashResourceName": "splash"
     },
     "StatusBar": {
-      "style": "Light",
+      "style": "LIGHT",
       "backgroundColor": "#080808",
       "overlaysWebView": false
     }

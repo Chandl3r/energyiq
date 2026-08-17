@@ -1011,19 +1011,7 @@ export default function AppShell({ user, dati, onSignOut, onRefresh }) {
         body { background:#050505; }
       `}</style>
       <div style={{ width:"100%", maxWidth:430, minHeight:"100vh", background:C.bg, display:"flex", flexDirection:"column", fontFamily:"'DM Sans',sans-serif" }}>
-        <div style={{ height:44, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 20px", flexShrink:0 }}>
-          <span style={{ color:C.textDim, fontSize:12, fontWeight:600 }}>
-            {new Date().toLocaleTimeString("it-IT", { hour:"2-digit", minute:"2-digit" })}
-          </span>
-          <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-            <div style={{ display:"flex", gap:2 }}>{[3,4,5,6].map(h=><div key={h} style={{ width:3, height:h, background:C.textMid, borderRadius:1 }}/>)}</div>
-            <div style={{ width:16, height:8, border:`1.5px solid ${C.textMid}`, borderRadius:2, position:"relative" }}>
-              <div style={{ position:"absolute", right:-4, top:"50%", transform:"translateY(-50%)", width:3, height:4, background:C.textMid, borderRadius:"0 1px 1px 0" }} />
-              <div style={{ width:"70%", height:"100%", background:C.green, borderRadius:1 }} />
-            </div>
-          </div>
-        </div>
-        <div style={{ flex:1, overflowY:"auto", padding:"8px 16px 100px" }}>
+        <div style={{ flex:1, overflowY:"auto", padding:"16px 16px 100px" }}>
           {tab==="home"     && <Dashboard user={user} dati={dati} onGoUpload={() => setTab("upload")} />}
           {tab==="upload"   && <UploadScreen user={user} onBollettaSaved={() => { onRefresh(); setTab("home"); }} />}
           {tab==="consumi"  && <ConsumiScreen user={user} />}
