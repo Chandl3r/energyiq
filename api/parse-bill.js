@@ -1,13 +1,12 @@
 // api/parse-bill.js
-// Primario:  Groq (Sistema a cascata su 3 modelli)
-// Fallback:  OpenRouter (Modelli gratuiti storici e stabili)
-// Post-processing: regex deterministico per prezzo_materia_prima
+// Primario:  Groq (Modelli di Produzione 2026)
+// Fallback:  OpenRouter (Modelli gratuiti)
 
 const GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
-Rispondi SOLO con il JSON strutturato esattamente in questo modo, senza backtick o testo prima e dopo.
+Rispondi SOLO ed ESCLUSIVAMENTE con il JSON strutturato esattamente in questo modo, senza backtick o testo aggiuntivo.
 
 {
   "tipo_utenza": "LUCE" oppure "GAS",
@@ -57,11 +56,11 @@ function extractPrezzoRegex(testo) {
   return null;
 }
 
-// 1. Modelli Groq (in ordine di priorità)
+// Nuovi modelli presi direttamente dalla Dashboard Groq attuale
 const GROQ_MODELS = [
-  "qwen/qwen3.6-27b",    // Il modello consigliato via email
-  "mixtral-8x7b-32768",  // Storico, super stabile su Groq
-  "llama3-8b-8192"       // Il vecchio Llama3 (spesso ancora accessibile sui piani free)
+  "qwen/qwen3.6-27b",     // Il più stabile per il parsing
+  "openai/gpt-oss-120b",  // Molto intelligente ma limiti severi (ecco perché tagliamo il testo)
+  "qwen/qwen3.8-27b"      // Backup aggiuntivo della famiglia Qwen
 ];
 
 async function callGroq(model, messages, apiKey) {
@@ -72,7 +71,8 @@ async function callGroq(model, messages, apiKey) {
       model, 
       messages, 
       temperature: 0.1, 
-      max_tokens: 1500
+      max_tokens: 800, // Limite abbassato per evitare l'Error 429 Rate Limit
+      response_format: { type: "json_object" } // FORZA IL JSON CORRETTO
     }),
   });
   const data = await res.json();
@@ -84,10 +84,10 @@ async function callGroq(model, messages, apiKey) {
   return data.choices?.[0]?.message?.content ?? "";
 }
 
-// 2. Modelli OpenRouter (Solo quelli gratuiti storici garantiti)
+// Modelli storici OpenRouter ad altissima disponibilità
 const OR_FALLBACK_MODELS = [
-  "huggingfaceh4/zephyr-7b-beta:free",
-  "microsoft/phi-3-mini-128k-instruct:free"
+  "mistralai/mistral-7b-instruct:free",
+  "openchat/openchat-7b:free"
 ];
 
 async function callOpenRouter(model, messages, apiKey) {
@@ -103,7 +103,7 @@ async function callOpenRouter(model, messages, apiKey) {
       model, 
       messages, 
       temperature: 0.1, 
-      max_tokens: 1500
+      max_tokens: 800
     }),
   });
   const data = await res.json();
@@ -151,34 +151,35 @@ export default async function handler(req, res) {
     if (!body.text || body.text.trim().length < 30)
       return res.status(400).json({ error: "Testo troppo corto" });
 
-    const testo = body.text.slice(0, 10000); // Taglio a 10k caratteri per stare nei limiti dei token
+    // TAGLIO A 6000 CARATTERI: Previene il superamento del limite "8000 TPM" dei piani gratuiti
+    const testo = body.text.slice(0, 6000); 
+    console.log(`[parse-bill] ${testo.length} chars elaborati.`);
+
     const messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testo}` }];
 
     let parsed = null;
     const errors = [];
 
-    // TENTATIVO 1: Ciclo sui modelli Groq
     if (groqKey) {
       for (const model of GROQ_MODELS) {
         try {
           console.log(`[parse-bill] Provo Groq: ${model}...`);
           parsed = parseJson(await callGroq(model, messages, groqKey));
-          break; // Se ha successo, esce dal ciclo
+          break;
         } catch (e) {
           console.error(`[parse-bill] Groq ${model} fallito: ${e.message}`);
           errors.push(`Groq (${model}): ${e.message}`);
-          await new Promise(r => setTimeout(r, 1000)); // Pausa prima del prossimo tentativo
+          await new Promise(r => setTimeout(r, 1000));
         }
       }
     }
 
-    // TENTATIVO 2: Ciclo sui modelli OpenRouter (solo se Groq ha fallito tutto)
     if (!parsed && orKey) {
       for (const model of OR_FALLBACK_MODELS) {
         try {
           console.log(`[parse-bill] Provo OpenRouter: ${model}...`);
           parsed = parseJson(await callOpenRouter(model, messages, orKey));
-          break; // Se ha successo, esce dal ciclo
+          break;
         } catch (e) {
           console.error(`[parse-bill] OR ${model} fallito: ${e.message}`);
           errors.push(`OR (${model}): ${e.message}`);
@@ -187,7 +188,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Se TUTTI i tentativi sono falliti
     if (!parsed) {
       console.error("[parse-bill] Tutti i modelli falliti. Errori:", errors);
       return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico. Riprova tra poco.", detail: errors.join(" | ") });
@@ -196,7 +196,6 @@ export default async function handler(req, res) {
     if (!parsed.pod_pdr)
       return res.status(422).json({ error: "POD o PDR non trovato nella bolletta." });
 
-    // Post-processing per il prezzo
     if (body.prezzo_override != null) {
       parsed.prezzo_materia_prima = body.prezzo_override;
     } else {
