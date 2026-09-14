@@ -1,13 +1,13 @@
 // api/parse-bill.js
-// Primario:  Groq  (gratuito, 14.400 req/giorno, nessuna carta)
-// Fallback:  OpenRouter free models
-// Post-processing: regex deterministico per prezzo_materia_prima (non dipende dall'LLM)
+// Primario:  Groq (Sistema a cascata su 3 modelli)
+// Fallback:  OpenRouter (Modelli gratuiti storici e stabili)
+// Post-processing: regex deterministico per prezzo_materia_prima
 
 const GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
-Rispondi SOLO con il JSON strutturato esattamente in questo modo.
+Rispondi SOLO con il JSON strutturato esattamente in questo modo, senza backtick o testo prima e dopo.
 
 {
   "tipo_utenza": "LUCE" oppure "GAS",
@@ -57,33 +57,37 @@ function extractPrezzoRegex(testo) {
   return null;
 }
 
-async function callGroq(messages, apiKey) {
+// 1. Modelli Groq (in ordine di priorità)
+const GROQ_MODELS = [
+  "qwen/qwen3.6-27b",    // Il modello consigliato via email
+  "mixtral-8x7b-32768",  // Storico, super stabile su Groq
+  "llama3-8b-8192"       // Il vecchio Llama3 (spesso ancora accessibile sui piani free)
+];
+
+async function callGroq(model, messages, apiKey) {
   const res = await fetch(GROQ_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
     body: JSON.stringify({ 
-      model: "llama-3.1-8b-instant", // Modello più veloce e con limiti più ampi
+      model, 
       messages, 
       temperature: 0.1, 
-      max_tokens: 1500,
-      response_format: { type: "json_object" } // FORZA IL SERVER A RESTITUIRE JSON VALIDO
+      max_tokens: 1500
     }),
   });
   const data = await res.json();
   if (!res.ok) {
     const msg = data?.error?.message ?? JSON.stringify(data);
-    console.error(`[Groq] HTTP ${res.status}: ${msg}`);
-    throw new Error(`Groq HTTP ${res.status}: ${msg}`);
+    throw new Error(`${msg}`);
   }
-  console.log("[Groq] OK");
+  console.log(`[Groq] ${model} OK`);
   return data.choices?.[0]?.message?.content ?? "";
 }
 
-// Nuovi modelli fallback OpenRouter gratuiti e funzionanti
+// 2. Modelli OpenRouter (Solo quelli gratuiti storici garantiti)
 const OR_FALLBACK_MODELS = [
-  "google/gemini-2.5-flash-free",
-  "meta-llama/llama-3-8b-instruct:free",
-  "qwen/qwen-2.5-coder-32b-instruct:free"
+  "huggingfaceh4/zephyr-7b-beta:free",
+  "microsoft/phi-3-mini-128k-instruct:free"
 ];
 
 async function callOpenRouter(model, messages, apiKey) {
@@ -99,28 +103,25 @@ async function callOpenRouter(model, messages, apiKey) {
       model, 
       messages, 
       temperature: 0.1, 
-      max_tokens: 1500,
-      response_format: { type: "json_object" }
+      max_tokens: 1500
     }),
   });
   const data = await res.json();
   if (!res.ok) {
     const msg = data?.error?.message ?? JSON.stringify(data);
-    console.error(`[OR] ${model} HTTP ${res.status}: ${msg}`);
-    throw new Error(`${model}: HTTP ${res.status} — ${msg}`);
+    throw new Error(`${msg}`);
   }
   console.log(`[OR] ${model} OK`);
   return data.choices?.[0]?.message?.content ?? "";
 }
 
 function parseJson(raw) {
-  // Con response_format: json_object, la risposta è già un JSON puro
   try {
-    return JSON.parse(raw);
-  } catch (err) {
     const m = raw.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error("Nessun JSON nella risposta");
+    if (!m) throw new Error("Nessun JSON trovato nel testo");
     return JSON.parse(m[0]);
+  } catch (err) {
+    throw new Error(`Errore di validazione JSON: ${err.message}`);
   }
 }
 
@@ -150,43 +151,52 @@ export default async function handler(req, res) {
     if (!body.text || body.text.trim().length < 30)
       return res.status(400).json({ error: "Testo troppo corto" });
 
-    // Riduciamo leggermente i caratteri massimi per stare sicuri nei limiti
-    const testo = body.text.slice(0, 10000);
-    console.log(`[parse-bill] ${testo.length} chars`);
-
+    const testo = body.text.slice(0, 10000); // Taglio a 10k caratteri per stare nei limiti dei token
     const messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testo}` }];
 
     let parsed = null;
     const errors = [];
 
+    // TENTATIVO 1: Ciclo sui modelli Groq
     if (groqKey) {
-      try {
-        parsed = parseJson(await callGroq(messages, groqKey));
-      } catch (e) {
-        errors.push(`Groq: ${e.message}`);
+      for (const model of GROQ_MODELS) {
+        try {
+          console.log(`[parse-bill] Provo Groq: ${model}...`);
+          parsed = parseJson(await callGroq(model, messages, groqKey));
+          break; // Se ha successo, esce dal ciclo
+        } catch (e) {
+          console.error(`[parse-bill] Groq ${model} fallito: ${e.message}`);
+          errors.push(`Groq (${model}): ${e.message}`);
+          await new Promise(r => setTimeout(r, 1000)); // Pausa prima del prossimo tentativo
+        }
       }
     }
 
+    // TENTATIVO 2: Ciclo sui modelli OpenRouter (solo se Groq ha fallito tutto)
     if (!parsed && orKey) {
       for (const model of OR_FALLBACK_MODELS) {
         try {
+          console.log(`[parse-bill] Provo OpenRouter: ${model}...`);
           parsed = parseJson(await callOpenRouter(model, messages, orKey));
-          break;
+          break; // Se ha successo, esce dal ciclo
         } catch (e) {
-          errors.push(e.message);
+          console.error(`[parse-bill] OR ${model} fallito: ${e.message}`);
+          errors.push(`OR (${model}): ${e.message}`);
           await new Promise(r => setTimeout(r, 1000));
         }
       }
     }
 
+    // Se TUTTI i tentativi sono falliti
     if (!parsed) {
-      console.error("[parse-bill] tutti falliti:", errors);
-      return res.status(502).json({ error: "Parsing non riuscito. Riprova.", detail: errors.join(" | ") });
+      console.error("[parse-bill] Tutti i modelli falliti. Errori:", errors);
+      return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico. Riprova tra poco.", detail: errors.join(" | ") });
     }
 
     if (!parsed.pod_pdr)
-      return res.status(422).json({ error: "POD/PDR non trovato nella bolletta." });
+      return res.status(422).json({ error: "POD o PDR non trovato nella bolletta." });
 
+    // Post-processing per il prezzo
     if (body.prezzo_override != null) {
       parsed.prezzo_materia_prima = body.prezzo_override;
     } else {
@@ -199,7 +209,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, data: parsed });
 
   } catch (err) {
-    console.error("[parse-bill] crash:", err.message);
+    console.error("[parse-bill] Errore critico:", err.message);
     return res.status(500).json({ error: err.message });
   }
 }
