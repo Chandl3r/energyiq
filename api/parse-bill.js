@@ -75,7 +75,7 @@ async function callGroq(messages, apiKey) {
   const res = await fetch(GROQ_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages, temperature: 0.1, max_tokens: 1500 }),
+    body: JSON.stringify({ model: "openai/gpt-oss-120b", messages, temperature: 0.1, max_tokens: 1500 }), // AGGIORNATO AL NUOVO MODELLO
   });
   const data = await res.json();
   if (!res.ok) {
@@ -87,10 +87,11 @@ async function callGroq(messages, apiKey) {
   return data.choices?.[0]?.message?.content ?? "";
 }
 
+// Fallback aggiornati con modelli free correnti e stabili su OpenRouter
 const OR_FALLBACK_MODELS = [
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "google/gemma-3-27b-it:free",
-  "mistralai/mistral-small-3.1-24b-instruct:free",
+  "meta-llama/llama-3.1-8b-instruct:free", 
+  "google/gemma-2-9b-it:free",
+  "mistralai/mistral-nemo:free",
 ];
 
 async function callOpenRouter(model, messages, apiKey) {
