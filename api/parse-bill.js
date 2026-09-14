@@ -7,7 +7,7 @@ const GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
-Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun backtick.
+Rispondi SOLO con il JSON strutturato esattamente in questo modo.
 
 {
   "tipo_utenza": "LUCE" oppure "GAS",
@@ -32,28 +32,14 @@ Rispondi SOLO con il JSON, nessun testo aggiuntivo, nessun markdown, nessun back
 }
 
 Regole OBBLIGATORIE:
-
 1. tipo_utenza: elettricità/luce = LUCE, gas = GAS
-
-2. pod_pdr: per luce il codice POD inizia con "IT" (es. IT012E00367605), per gas il PDR è numerico (es. 05260200451415). OBBLIGATORIO.
-
-3. consumo_fatturato: il consumo del PERIODO di questa bolletta (es. "Consumo totale fatturato del periodo"). NON usare il consumo annuo qui.
-
-4. consumo_annuo: il consumo annuale dalla sezione "CONSUMO ANNUO" (es. 5268 kWh oppure 817 Smc).
-
-5. prezzo_materia_prima: prendi il prezzo DAL BOX DELL'OFFERTA, NON dallo Scontrino dell'Energia.
-   - Cerca pattern come "Prezzo Fisso(Dic.25)=0,12636 euro/kWh" - estrai 0.12636
-   - Cerca pattern come "Prezzo Fisso(Gen.26)=0,513393 euro/Smc" - estrai 0.513393
-   - NON usare il "Prezzo medio" dello Scontrino (include rete e oneri, non e materia prima).
-
-6. storico_mensile: estrai TUTTI i mesi da grafici/tabelle storiche. Formato:
-   - "mese": YYYY-MM (converti "Ott 24" in "2024-10")
-   - "consumo": numero mensile effettivo, NON cumulativo
-   Se assente, usa [].
-
+2. pod_pdr: per luce il codice POD inizia con "IT", per gas il PDR è numerico.
+3. consumo_fatturato: il consumo del PERIODO di questa bolletta.
+4. consumo_annuo: il consumo annuale dalla sezione "CONSUMO ANNUO".
+5. prezzo_materia_prima: prendi il prezzo DAL BOX DELL'OFFERTA, NON dallo Scontrino. Estrai solo il numero (es 0.12636).
+6. storico_mensile: estrai TUTTI i mesi. Formato: "mese": YYYY-MM, "consumo": numero effettivo. Se assente, usa [].
 7. Se un campo non e presente usa null.`;
 
-// Regex deterministico per prezzo materia prima (post-processing, sovrascrive LLM)
 function extractPrezzoRegex(testo) {
   const patterns = [
     /Prezzo\s+Fisso\s*(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*[€euro]*\s*\/\s*(?:kWh|Smc)/i,
@@ -75,7 +61,13 @@ async function callGroq(messages, apiKey) {
   const res = await fetch(GROQ_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: "openai/gpt-oss-120b", messages, temperature: 0.1, max_tokens: 1500 }), // AGGIORNATO AL NUOVO MODELLO
+    body: JSON.stringify({ 
+      model: "llama-3.1-8b-instant", // Modello più veloce e con limiti più ampi
+      messages, 
+      temperature: 0.1, 
+      max_tokens: 1500,
+      response_format: { type: "json_object" } // FORZA IL SERVER A RESTITUIRE JSON VALIDO
+    }),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -87,11 +79,11 @@ async function callGroq(messages, apiKey) {
   return data.choices?.[0]?.message?.content ?? "";
 }
 
-// Fallback aggiornati con modelli free correnti e stabili su OpenRouter
+// Nuovi modelli fallback OpenRouter gratuiti e funzionanti
 const OR_FALLBACK_MODELS = [
-  "meta-llama/llama-3.1-8b-instruct:free", 
-  "google/gemma-2-9b-it:free",
-  "mistralai/mistral-nemo:free",
+  "google/gemini-2.5-flash-free",
+  "meta-llama/llama-3-8b-instruct:free",
+  "qwen/qwen-2.5-coder-32b-instruct:free"
 ];
 
 async function callOpenRouter(model, messages, apiKey) {
@@ -103,7 +95,13 @@ async function callOpenRouter(model, messages, apiKey) {
       "HTTP-Referer": "https://energyiq-omega.vercel.app",
       "X-Title": "EnergyIQ",
     },
-    body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 1500 }),
+    body: JSON.stringify({ 
+      model, 
+      messages, 
+      temperature: 0.1, 
+      max_tokens: 1500,
+      response_format: { type: "json_object" }
+    }),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -116,9 +114,14 @@ async function callOpenRouter(model, messages, apiKey) {
 }
 
 function parseJson(raw) {
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error("Nessun JSON nella risposta");
-  return JSON.parse(m[0]);
+  // Con response_format: json_object, la risposta è già un JSON puro
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error("Nessun JSON nella risposta");
+    return JSON.parse(m[0]);
+  }
 }
 
 export default async function handler(req, res) {
@@ -147,7 +150,8 @@ export default async function handler(req, res) {
     if (!body.text || body.text.trim().length < 30)
       return res.status(400).json({ error: "Testo troppo corto" });
 
-    const testo = body.text.slice(0, 12000);
+    // Riduciamo leggermente i caratteri massimi per stare sicuri nei limiti
+    const testo = body.text.slice(0, 10000);
     console.log(`[parse-bill] ${testo.length} chars`);
 
     const messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testo}` }];
@@ -155,7 +159,6 @@ export default async function handler(req, res) {
     let parsed = null;
     const errors = [];
 
-    // Primario: Groq (gratuito)
     if (groqKey) {
       try {
         parsed = parseJson(await callGroq(messages, groqKey));
@@ -164,7 +167,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Fallback: OpenRouter free
     if (!parsed && orKey) {
       for (const model of OR_FALLBACK_MODELS) {
         try {
@@ -172,7 +174,7 @@ export default async function handler(req, res) {
           break;
         } catch (e) {
           errors.push(e.message);
-          await new Promise(r => setTimeout(r, 1500));
+          await new Promise(r => setTimeout(r, 1000));
         }
       }
     }
@@ -185,14 +187,11 @@ export default async function handler(req, res) {
     if (!parsed.pod_pdr)
       return res.status(422).json({ error: "POD/PDR non trovato nella bolletta." });
 
-    // Post-processing prezzo: priorità → client regex (testo pieno) → server regex → LLM
     if (body.prezzo_override != null) {
-      console.log(`[parse-bill] prezzo client-regex: ${body.prezzo_override} (LLM: ${parsed.prezzo_materia_prima})`);
       parsed.prezzo_materia_prima = body.prezzo_override;
     } else {
       const prezzoRegex = extractPrezzoRegex(testo);
       if (prezzoRegex !== null) {
-        console.log(`[parse-bill] prezzo server-regex: ${prezzoRegex} (LLM: ${parsed.prezzo_materia_prima})`);
         parsed.prezzo_materia_prima = prezzoRegex;
       }
     }
