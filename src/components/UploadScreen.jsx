@@ -132,7 +132,8 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         payload = { type: "image", mimeType: mime, data: b64 };
       }
 
-      const res  = await fetch("/api/parse-bill", {
+      // FIX: URL Assoluto per Vercel
+      const res  = await fetch("https://energyiq-omega.vercel.app/api/parse-bill", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify(payload),
