@@ -57,7 +57,6 @@ function extractPrezzoRegex(testo) {
 }
 
 async function callGroq(model, messages, apiKey, isVision) {
-  // Nei modelli multimodali (vision) evitiamo di forzare type: json_object per evitare crash
   const extraParams = isVision ? {} : { response_format: { type: "json_object" } };
   const res = await fetch(GROQ_URL, {
     method: "POST",
@@ -132,7 +131,6 @@ export default async function handler(req, res) {
     let isVision = false;
     let testoPerRegex = "";
 
-    // ── GESTIONE INPUT (PDF vs FOTO) ──
     if (body.type === "text") {
       if (!body.text || body.text.trim().length < 30) return res.status(400).json({ error: "Testo troppo corto" });
       testoPerRegex = body.text.slice(0, 6000);
@@ -155,16 +153,14 @@ export default async function handler(req, res) {
     let parsed = null;
     const errors = [];
 
-    // ── SCELTA MODELLI (Vision vs Text) ──
     const GROQ_MODELS = isVision 
-      ? ["llama-3.2-90b-vision-preview"] 
+      ? ["llama-3.2-11b-vision-preview"] 
       : ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
       
     const OR_MODELS = isVision 
-      ? ["google/gemini-2.5-flash-free"] 
+      ? ["meta-llama/llama-3.2-11b-vision-instruct:free", "google/gemini-2.0-flash-exp:free"] 
       : ["mistralai/mistral-7b-instruct:free", "openchat/openchat-7b:free"];
 
-    // TENTATIVO 1: Groq
     if (groqKey) {
       for (const model of GROQ_MODELS) {
         try {
@@ -179,7 +175,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // TENTATIVO 2: OpenRouter
     if (!parsed && orKey) {
       for (const model of OR_MODELS) {
         try {
@@ -201,11 +196,9 @@ export default async function handler(req, res) {
 
     if (!parsed.pod_pdr) return res.status(422).json({ error: "POD o PDR non trovato nella bolletta." });
 
-    // ── POST-PROCESSING PREZZO ──
     if (body.prezzo_override != null) {
       parsed.prezzo_materia_prima = body.prezzo_override;
     } else if (!isVision) {
-      // Il Regex lato server funziona solo sul testo estratto dai PDF
       const prezzoRegex = extractPrezzoRegex(testoPerRegex);
       if (prezzoRegex !== null) parsed.prezzo_materia_prima = prezzoRegex;
     }
