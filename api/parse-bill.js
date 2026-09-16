@@ -1,6 +1,5 @@
 // api/parse-bill.js
-// Primario:  Groq (Testo + Vision)
-// Fallback:  OpenRouter (Testo + Vision)
+// Doppio Binario AI: Groq per i PDF, OpenRouter per le Foto
 
 const GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -56,8 +55,7 @@ function extractPrezzoRegex(testo) {
   return null;
 }
 
-async function callGroq(model, messages, apiKey, isVision) {
-  const extraParams = isVision ? {} : { response_format: { type: "json_object" } };
+async function callGroq(model, messages, apiKey) {
   const res = await fetch(GROQ_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
@@ -66,7 +64,7 @@ async function callGroq(model, messages, apiKey, isVision) {
       messages,
       temperature: 0.1,
       max_tokens: 800,
-      ...extraParams
+      response_format: { type: "json_object" }
     }),
   });
   const data = await res.json();
@@ -131,10 +129,11 @@ export default async function handler(req, res) {
     let isVision = false;
     let testoPerRegex = "";
 
+    // ── GESTIONE INPUT (PDF vs FOTO) ──
     if (body.type === "text") {
-      if (!body.text || body.text.trim().length < 30) return res.status(400).json({ error: "Testo troppo corto" });
+      if (!body.text || body.text.trim().length < 30) return res.status(400).json({ error: "Testo PDF non leggibile." });
       testoPerRegex = body.text.slice(0, 6000);
-      console.log(`[parse-bill] PDF - ${testoPerRegex.length} chars elaborati.`);
+      console.log(`[parse-bill] PDF - ${testoPerRegex.length} chars.`);
       messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testoPerRegex}` }];
     } else if (body.type === "image") {
       console.log(`[parse-bill] FOTO/SCREENSHOT rilevato.`);
@@ -153,38 +152,55 @@ export default async function handler(req, res) {
     let parsed = null;
     const errors = [];
 
-    const GROQ_MODELS = isVision 
-      ? ["llama-3.2-11b-vision-preview"] 
-      : ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
-      
-    const OR_MODELS = isVision 
-      ? ["meta-llama/llama-3.2-11b-vision-instruct:free", "google/gemini-2.0-flash-exp:free"] 
-      : ["mistralai/mistral-7b-instruct:free", "openchat/openchat-7b:free"];
+    // ── SCELTA MODELLI ──
+    const GROQ_TEXT_MODELS = ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
+    const OR_TEXT_MODELS   = ["mistralai/mistral-7b-instruct:free", "openchat/openchat-7b:free"];
+    
+    // Modelli Vision affidabili e funzionanti al 100% su OpenRouter
+    const OR_VISION_MODELS = ["google/gemini-1.5-flash-free", "qwen/qwen-2-vl-7b-instruct:free"];
 
-    if (groqKey) {
-      for (const model of GROQ_MODELS) {
-        try {
-          console.log(`[parse-bill] Provo Groq: ${model}...`);
-          parsed = parseJson(await callGroq(model, messages, groqKey, isVision));
-          break;
-        } catch (e) {
-          console.error(`[parse-bill] Groq ${model} fallito: ${e.message}`);
-          errors.push(`Groq (${model}): ${e.message}`);
-          await new Promise(r => setTimeout(r, 1000));
+    // ── ESECUZIONE ──
+    if (isVision) {
+      // PER LE FOTO: Groq non ha modelli Vision al momento, andiamo dritti su OpenRouter
+      if (orKey) {
+        for (const model of OR_VISION_MODELS) {
+          try {
+            console.log(`[parse-bill] Provo Vision OR: ${model}...`);
+            parsed = parseJson(await callOpenRouter(model, messages, orKey));
+            break;
+          } catch (e) {
+            console.error(`[parse-bill] Vision OR ${model} fallito: ${e.message}`);
+            errors.push(`Vision OR (${model}): ${e.message}`);
+            await new Promise(r => setTimeout(r, 1000));
+          }
         }
       }
-    }
-
-    if (!parsed && orKey) {
-      for (const model of OR_MODELS) {
-        try {
-          console.log(`[parse-bill] Provo OpenRouter: ${model}...`);
-          parsed = parseJson(await callOpenRouter(model, messages, orKey));
-          break;
-        } catch (e) {
-          console.error(`[parse-bill] OR ${model} fallito: ${e.message}`);
-          errors.push(`OR (${model}): ${e.message}`);
-          await new Promise(r => setTimeout(r, 1000));
+    } else {
+      // PER I PDF: Prima proviamo Groq, poi OpenRouter come backup
+      if (groqKey) {
+        for (const model of GROQ_TEXT_MODELS) {
+          try {
+            console.log(`[parse-bill] Provo Text Groq: ${model}...`);
+            parsed = parseJson(await callGroq(model, messages, groqKey));
+            break;
+          } catch (e) {
+            console.error(`[parse-bill] Text Groq ${model} fallito: ${e.message}`);
+            errors.push(`Groq (${model}): ${e.message}`);
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+      }
+      if (!parsed && orKey) {
+        for (const model of OR_TEXT_MODELS) {
+          try {
+            console.log(`[parse-bill] Provo Text OR: ${model}...`);
+            parsed = parseJson(await callOpenRouter(model, messages, orKey));
+            break;
+          } catch (e) {
+            console.error(`[parse-bill] Text OR ${model} fallito: ${e.message}`);
+            errors.push(`OR (${model}): ${e.message}`);
+            await new Promise(r => setTimeout(r, 1000));
+          }
         }
       }
     }
@@ -194,8 +210,9 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico. Riprova tra poco.", detail: errors.join(" | ") });
     }
 
-    if (!parsed.pod_pdr) return res.status(422).json({ error: "POD o PDR non trovato nella bolletta." });
+    if (!parsed.pod_pdr) return res.status(422).json({ error: "POD o PDR non trovato nell'immagine o nel documento." });
 
+    // ── POST-PROCESSING PREZZO ──
     if (body.prezzo_override != null) {
       parsed.prezzo_materia_prima = body.prezzo_override;
     } else if (!isVision) {
