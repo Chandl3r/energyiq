@@ -1,5 +1,5 @@
 // api/parse-bill.js
-// Doppio Binario AI: Groq per i PDF, OpenRouter per le Foto
+// Doppio Binario ZERO COSTI: Groq per i PDF, OpenRouter (con tappeto di fallback) per le Foto
 
 const GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -156,12 +156,18 @@ export default async function handler(req, res) {
     const GROQ_TEXT_MODELS = ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
     const OR_TEXT_MODELS   = ["mistralai/mistral-7b-instruct:free", "openchat/openchat-7b:free"];
     
-    // Modelli Vision affidabili e funzionanti al 100% su OpenRouter
-    const OR_VISION_MODELS = ["google/gemini-1.5-flash-free", "qwen/qwen-2-vl-7b-instruct:free"];
+    // Tappeto di modelli Vision GRATUITI attivi su OpenRouter. Se uno è pieno, prova il successivo.
+    const OR_VISION_MODELS = [
+      "google/gemini-2.0-flash-exp:free", 
+      "google/gemini-2.0-flash-thinking-exp:free",
+      "meta-llama/llama-3.2-90b-vision-instruct:free",
+      "meta-llama/llama-3.2-11b-vision-instruct:free",
+      "qwen/qwen-2-vl-72b-instruct:free",
+      "qwen/qwen-2-vl-7b-instruct:free"
+    ];
 
     // ── ESECUZIONE ──
     if (isVision) {
-      // PER LE FOTO: Groq non ha modelli Vision al momento, andiamo dritti su OpenRouter
       if (orKey) {
         for (const model of OR_VISION_MODELS) {
           try {
@@ -171,12 +177,13 @@ export default async function handler(req, res) {
           } catch (e) {
             console.error(`[parse-bill] Vision OR ${model} fallito: ${e.message}`);
             errors.push(`Vision OR (${model}): ${e.message}`);
-            await new Promise(r => setTimeout(r, 1000));
+            // Breve pausa per evitare che OpenRouter ci blocchi per troppe chiamate simultanee
+            await new Promise(r => setTimeout(r, 1500));
           }
         }
       }
     } else {
-      // PER I PDF: Prima proviamo Groq, poi OpenRouter come backup
+      // PDF Flow (invariato)
       if (groqKey) {
         for (const model of GROQ_TEXT_MODELS) {
           try {
@@ -207,6 +214,11 @@ export default async function handler(req, res) {
 
     if (!parsed) {
       console.error("[parse-bill] Tutti i modelli falliti. Errori:", errors);
+      
+      // Messaggio di errore personalizzato se la rete gratuita per le foto è tutta intasata
+      if (isVision) {
+        return res.status(502).json({ error: "I server AI gratuiti per le immagini sono momentaneamente pieni. Riprova tra un minuto, oppure carica la bolletta in formato PDF." });
+      }
       return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico. Riprova tra poco.", detail: errors.join(" | ") });
     }
 
