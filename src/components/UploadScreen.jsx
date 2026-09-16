@@ -8,7 +8,7 @@ import { supabase } from "../lib/supabase";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker?url";
 
-// Configura il worker (Vite lo gestisce automaticamente)
+// Configura il worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 const C = {
@@ -21,7 +21,6 @@ const C = {
   text:"#ffffff", textMid:"#9ca3af", textDim:"#4b5563",
 };
 
-// Regex deterministico per prezzo materia prima — gira sul testo COMPLETO del PDF
 function extractPrezzoFromText(raw) {
   const patterns = [
     /Prezzo\s+Fisso\s*(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*€\s*\/\s*(?:kWh|Smc)/i,
@@ -40,22 +39,32 @@ function extractPrezzoFromText(raw) {
 }
 
 async function extractPdfText(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  // FIX PER iOS: Utilizziamo FileReader invece di file.arrayBuffer() per massima compatibilità
+  const arrayBuffer = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+
+  // FIX PER iOS: Convertiamo in Uint8Array, formato richiesto da pdf.js per evitare crash
+  const typedarray = new Uint8Array(arrayBuffer);
+  
+  const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
   let text = "";
+  
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    text += content.items.map(item => item.str).join(" ") + "\n";
+    // FIX PER iOS: Controllo di sicurezza se "items" è indefinito
+    if (content && content.items) {
+      text += content.items.map(item => item.str || "").join(" ") + "\n";
+    }
   }
+  
   const raw = text.trim();
-
-  // Estrae prezzo sul testo completo PRIMA di qualsiasi slice
   const prezzoOverride = extractPrezzoFromText(raw);
-  if (prezzoOverride) console.log("✅ Prezzo estratto client-side:", prezzoOverride);
-  else console.log("⚠️ Prezzo non trovato con regex client-side");
 
-  // Slice intelligente per LLM: manteniamo sotto 10.000 chars
   let testoLLM;
   if (raw.length <= 10000) {
     testoLLM = raw;
@@ -110,20 +119,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         const { testoLLM, prezzoOverride } = await extractPdfText(file);
         const testo = testoLLM;
         if (!testo || testo.length < 50)
-          throw new Error("PDF senza testo selezionabile. Prova a fotografare la bolletta.");
-
-        // ── DEBUG ──
-        console.log("=== PDF DEBUG ===");
-        console.log("Lunghezza testo estratto:", testo.length, "chars");
-        const lower = testo.toLowerCase();
-        const idxStorico = lower.search(/storico|informazioni storiche|andamento|consumo ann/);
-        if (idxStorico >= 0) {
-          console.log("✅ Trovata sezione storico a posizione:", idxStorico);
-          console.log("Estratto intorno allo storico:", testo.slice(Math.max(0, idxStorico-100), idxStorico+500));
-        } else {
-          console.log("❌ Sezione storico NON trovata nel testo estratto dal PDF");
-        }
-        console.log("=================");
+          throw new Error("PDF senza testo selezionabile. Riprova con un altro documento.");
 
         payload = { type: "text", text: testo, ...(prezzoOverride !== null && { prezzo_override: prezzoOverride }) };
       } else {
@@ -132,7 +128,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         payload = { type: "image", mimeType: mime, data: b64 };
       }
 
-      // FIX: URL Assoluto per Vercel
       const res  = await fetch("https://energyiq-omega.vercel.app/api/parse-bill", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
@@ -140,14 +135,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.detail ?? json.error ?? `HTTP ${res.status}`);
-
-      // ── DEBUG: mostra cosa ha estratto il modello ──
-      console.log("=== LLM OUTPUT DEBUG ===");
-      console.log("Modello usato:", json.model_used);
-      console.log("storico_mensile:", JSON.stringify(json.data?.storico_mensile));
-      console.log("consumo_fatturato:", json.data?.consumo_fatturato);
-      console.log("consumo_annuo:", json.data?.consumo_annuo);
-      console.log("========================");
 
       setDatiEstrat(json.data);
       setFase("review");
@@ -162,7 +149,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
     setFase("saving");
     setErrore(null);
     try {
-      // Normalizza date italiane → YYYY-MM-DD
       const mesi = { gennaio:1, febbraio:2, marzo:3, aprile:4, maggio:5, giugno:6,
                      luglio:7, agosto:8, settembre:9, ottobre:10, novembre:11, dicembre:12 };
       const normalizzaData = (s) => {
@@ -174,11 +160,10 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         }
         return null;
       };
-      // Normalizza numeri — estrae solo la parte numerica da stringhe come "80.0 Smc" o "145,32 €"
       const normalizzaNumero = (v) => {
         if (v === null || v === undefined) return null;
         if (typeof v === "number") return v;
-        const s = String(v).replace(",", "."); // gestisce virgola decimale italiana
+        const s = String(v).replace(",", "."); 
         const m = s.match(/[\d.]+/);
         return m ? parseFloat(m[0]) : null;
       };
@@ -338,7 +323,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                   fontFamily: k==="POD"||k==="PDR" ? "monospace":"inherit" }}>{v}</span>
               </div>
             ))}
-            {/* Storico mensile estratto */}
             {(() => {
               const storico = datiEstrat.storico_mensile ?? [];
               return (
@@ -350,7 +334,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                       color:      storico.length > 0 ? C.green    : "#f97316",
                       fontSize:10, fontWeight:700, borderRadius:20, padding:"2px 8px"
                     }}>
-                      {storico.length > 0 ? `${storico.length} mesi estratti` : "Non trovato nel PDF"}
+                      {storico.length > 0 ? `${storico.length} mesi estratti` : "Non trovato"}
                     </span>
                   </div>
                   {storico.length > 0 && (
