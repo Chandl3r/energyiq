@@ -46,8 +46,6 @@ function calcPct(bollette, benchmark) {
 }
 
 // Costruisce i dati grafico dai consumi mensili storici estratti dal PDF.
-// Funziona dalla prima bolletta in poi (usa storico_mensile del PDF).
-// Fallback automatico su consumo_fatturato spalmato sui mesi del periodo.
 function buildChartDataFromStorico(bollette, tipo, misureArera) {
   const maxItems = tipo === "LUCE" ? 15 : 16;
   const valueKey = tipo === "LUCE" ? "kwh" : "smc";
@@ -193,7 +191,6 @@ function LuceChart({ data, label, isArera }) {
     if (!rect) return null;
     const n = data.length;
     const innerW = rect.width - LUCE_M.left - LUCE_M.right;
-    // AreaChart con n punti: step = innerW/(n-1), primo punto al margine sx, ultimo al margine dx
     const step = innerW / (n - 1);
     const x = clientX - rect.left - LUCE_M.left;
     const idx = Math.max(0, Math.min(n - 1, Math.round(x / step)));
@@ -210,28 +207,20 @@ function LuceChart({ data, label, isArera }) {
     const n = data.length;
     const w = wrapRef.current?.offsetWidth ?? 320;
     const innerW = w - LUCE_M.left - LUCE_M.right;
-    // step per AreaChart: divide per (n-1) → primo al sx, ultimo al dx
     const step = innerW / (n - 1);
     const dotX = LUCE_M.left + activeIdx * step;
-    // Y: domain Recharts = [0, MAX_KWH*1.1]
     const dotY = LUCE_M.top + LUCE_PH * (1 - data[activeIdx].kwh / (MAX_KWH * 1.1));
     const bW=96, bH=30, bR=15, LIFT=26;
     const bX = Math.max(LUCE_M.left, Math.min(w-LUCE_M.right-bW, dotX-bW/2));
-    // aTip = base della freccia agganciata al balloon (clamped)
     const aTip = Math.max(bX+bR, Math.min(bX+bW-bR, dotX));
     const bY = dotY - LIFT - bH;
     const lineBottom = LUCE_M.top + LUCE_PH - 1;
     return (
       <svg style={{ position:"absolute", inset:0, pointerEvents:"none", overflow:"visible" }} width={w} height={LUCE_H}>
-        {/* Linea verticale tratteggiata — si ferma prima delle label mesi */}
         <line x1={dotX} y1={dotY+7} x2={dotX} y2={lineBottom}
           stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="3 3" strokeLinecap="round" />
-        {/* Punto attivo — bianco con bordo arancione */}
         <circle cx={dotX} cy={dotY} r={5.5} fill="white" stroke="#f59e0b" strokeWidth={2.5} />
-        {/* Tooltip balloon */}
         <rect x={bX} y={bY} width={bW} height={bH} rx={bR} ry={bR} fill="#f59e0b" />
-        {/* Freccia: base agganciata al balloon (aTip), punta punta sempre a dotX
-            → per mesi centrali è dritta, per Ott/Dic si inclina verso il punto */}
         <polygon points={`${aTip-6},${bY+bH-2} ${aTip+6},${bY+bH-2} ${dotX},${bY+bH+10}`} fill="#f59e0b" />
         <text x={bX+bW/2} y={bY+bH/2+5} textAnchor="middle" fill="black" fontWeight="800" fontSize="13" fontFamily="Sora,sans-serif">{data[activeIdx].kwh} kWh</text>
       </svg>
@@ -399,7 +388,6 @@ function AlertsBanner({ userId }) {
 }
 
 // ─── Alert computation (chiamata dopo import CSV) ─────────────────────────────
-// Esportata per essere usata da ConsumiScreen dopo l'upsert
 
 function Dashboard({ user, dati, onGoUpload }) {
   const [misureArera, setMisureArera] = useState([]);
@@ -416,7 +404,6 @@ function Dashboard({ user, dati, onGoUpload }) {
       const letture = lg || [];
       setMisureArera(misure);
       setLettureGasArera(letture);
-      // Calcola alert ogni volta che la Home si monta (dati freschi da DB)
       computeAndSaveAlerts(user.id, misure, letture);
     })();
   }, [user?.id]);
@@ -431,7 +418,6 @@ function Dashboard({ user, dati, onGoUpload }) {
   const { bollette, forniture } = dati;
   const hasDati = bollette.length > 0;
 
-  // Raggruppa bollette per fornitura
   const bollettePerFornitura = (fornituraId) =>
     bollette.filter(b => b.fornitura_id === fornituraId)
             .sort((a,b) => new Date(a.periodo_fine) - new Date(b.periodo_fine));
@@ -439,7 +425,6 @@ function Dashboard({ user, dati, onGoUpload }) {
   const spesaTotale = bollette.reduce((s,b) => s + Number(b.totale_pagare||0), 0);
   const nomeUtente  = user?.user_metadata?.full_name ?? user?.email?.split("@")[0] ?? "Utente";
 
-  // Risparmio/extra-costo vs mercato (PUN/PSV) da dati
   const { indici = [] } = dati;
   const ultimoPUN = [...indici].filter(i => i.tipo_indice === "PUN").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
   const ultimoPSV = [...indici].filter(i => i.tipo_indice === "PSV").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
@@ -461,20 +446,17 @@ function Dashboard({ user, dati, onGoUpload }) {
       }
     });
     if (!haCalcolo) return null;
-    return Math.round(totale); // positivo = spendi di più vs mercato, negativo = risparmi
+    return Math.round(totale);
   };
   const risparmioVsMercato = calcolaRisparmio();
-  // Label periodo: se abbiamo consumo_annuo usiamo "anno", altrimenti "periodo"
   const periodoLabel = "anno";
 
-  // Ultime bollette
   const ultimeBollette = [...bollette]
     .sort((a,b) => new Date(b.data_emissione||b.periodo_fine) - new Date(a.data_emissione||a.periodo_fine))
     .slice(0, 5);
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:14, paddingBottom:8 }}>
-      {/* Header */}
       <div style={{ background:`linear-gradient(135deg,#1a0f00 0%,${C.surface} 60%)`, borderRadius:20, padding:"20px 20px 16px", border:`1px solid ${C.border}`, position:"relative", overflow:"hidden" }}>
         <div style={{ position:"absolute", top:-40, right:-40, width:140, height:140, borderRadius:"50%", background:`radial-gradient(circle,${C.amberDim} 0%,transparent 70%)` }} />
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
@@ -523,7 +505,6 @@ function Dashboard({ user, dati, onGoUpload }) {
 
       {!hasDati && <EmptyState onGoUpload={onGoUpload} />}
 
-      {/* Ring cards: sempre Luce a sinistra, Gas a destra */}
       {(() => {
         const forLuce = forniture.filter(f => f.tipo_utenza === "LUCE");
         const forGas  = forniture.filter(f => f.tipo_utenza === "GAS");
@@ -541,7 +522,6 @@ function Dashboard({ user, dati, onGoUpload }) {
           const multiLine = isLuce ? forLuce.length > 1 : forGas.length > 1;
           const label     = f && multiLine ? (f.nickname ?? f.fornitore ?? f.pod_pdr) : null;
 
-          // vsAnno: confronto consumo anno corrente vs anno precedente
           const annoCorr = new Date().getFullYear();
           const annoPre  = annoCorr - 1;
           const consCurr = bollF.filter(b => b.periodo_fine && new Date(b.periodo_fine).getFullYear() === annoCorr)
@@ -556,7 +536,6 @@ function Dashboard({ user, dati, onGoUpload }) {
               })()
             : null;
 
-          // badge "Conveniente" se prezzo < PUN/PSV di mercato
           const indici     = dati?.indici ?? [];
           const ultimoInd  = [...indici].filter(i => i.tipo_indice === (isLuce?"PUN":"PSV"))
                                          .sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
@@ -597,10 +576,8 @@ function Dashboard({ user, dati, onGoUpload }) {
         ));
       })()}
 
-      {/* Alert banner — dismissibili, calcolati dopo import CSV */}
       <AlertsBanner userId={user?.id} />
 
-      {/* Grafici: prima Luce, poi Gas, ordine fisso */}
       {[
         ...forniture.filter(f => f.tipo_utenza === "LUCE"),
         ...forniture.filter(f => f.tipo_utenza === "GAS"),
@@ -609,7 +586,6 @@ function Dashboard({ user, dati, onGoUpload }) {
         const bollF     = bollettePerFornitura(f.id);
         const multiLine = forniture.filter(x => x.tipo_utenza === f.tipo_utenza).length > 1;
         const label     = multiLine ? (f.nickname ?? f.fornitore) : null;
-        // Seleziona dati ARERA per tipo utenza
         const areraData = isLuce ? misureArera : lettureGasArera;
 
         if (bollF.length === 0 && areraData.length === 0) {
@@ -632,8 +608,6 @@ function Dashboard({ user, dati, onGoUpload }) {
           : <GasChart  key={f.id} data={chartData} label={label} isArera={isArera} />;
       })}
 
-
-      {/* Ultime bollette */}
       {ultimeBollette.length > 0 && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:"0 0 14px" }}>Ultime bollette</p>
@@ -675,11 +649,9 @@ function Dashboard({ user, dati, onGoUpload }) {
 function MercatoScreen({ dati }) {
   const { indici = [], forniture = [], bollette = [] } = dati ?? {};
 
-  // Ultimi PUN e PSV disponibili
   const pun = [...indici].filter(i => i.tipo_indice === "PUN").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
   const psv = [...indici].filter(i => i.tipo_indice === "PSV").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
 
-  // Prezzo fisso dalla bolletta più recente (per tipo)
   const ultimaBollettaLuce = [...bollette].filter(b => b.forniture?.tipo_utenza === "LUCE")
     .sort((a,b) => new Date(b.periodo_fine) - new Date(a.periodo_fine))[0];
   const ultimaBollettaGas  = [...bollette].filter(b => b.forniture?.tipo_utenza === "GAS")
@@ -688,17 +660,14 @@ function MercatoScreen({ dati }) {
   const tariffaLuce = parseFloat(ultimaBollettaLuce?.dati_estratti?.prezzo_materia_prima) || null;
   const tariffaGas  = parseFloat(ultimaBollettaGas?.dati_estratti?.prezzo_materia_prima)  || null;
 
-  // Consumo annuo stimato (somma bollette)
   const consumoLuceAnnuo = bollette.filter(b => b.forniture?.tipo_utenza === "LUCE")
     .reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
   const consumoGasAnnuo  = bollette.filter(b => b.forniture?.tipo_utenza === "GAS")
     .reduce((s,b) => s + Number(b.consumo_fatturato||0), 0);
 
-  // Delta: positivo = mercato più economico (potrei risparmiare), negativo = la mia tariffa è più economica
   const deltaLuce = (pun && tariffaLuce) ? tariffaLuce - pun.valore_medio : null;
   const deltaGas  = (psv && tariffaGas)  ? tariffaGas  - psv.valore_medio  : null;
 
-  // Risparmio/perdita annua stimata
   const risparmioLuce = (deltaLuce !== null && consumoLuceAnnuo) ? deltaLuce * consumoLuceAnnuo : null;
   const risparmioGas  = (deltaGas  !== null && consumoGasAnnuo)  ? deltaGas  * consumoGasAnnuo  : null;
 
@@ -707,18 +676,15 @@ function MercatoScreen({ dati }) {
     const risparmioPositivo = risparmio > 0;
     return (
       <div style={{ background:bg, border:`1px solid ${mid}`, borderRadius:20, padding:20 }}>
-        {/* Header */}
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
           <div style={{ background:dim, borderRadius:8, padding:6 }}>{icon}</div>
           <span style={{ color:color, fontSize:11, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase" }}>{label}</span>
         </div>
-        {/* Valore mercato */}
         <p style={{ color:C.text, fontSize:34, fontWeight:800, margin:"0 0 2px", fontFamily:"'Sora',sans-serif" }}>
           {mercato !== null ? Number(mercato).toFixed(4) : "—"}
           {" "}<span style={{ fontSize:14, color:C.textMid }}>{unit}</span>
         </p>
         <p style={{ color:C.textDim, fontSize:11, margin:"0 0 14px" }}>Prezzo mercato all'ingrosso</p>
-        {/* Confronto tariffa */}
         {hasTariffa && mercato !== null ? (
           <div style={{ borderTop:`1px solid ${mid}`, paddingTop:14 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
@@ -733,7 +699,6 @@ function MercatoScreen({ dati }) {
                 {delta > 0 ? "+" : ""}{Number(delta).toFixed(4)} {unit}
               </span>
             </div>
-            {/* Stima risparmio annuo */}
             {consumoAnnuo > 0 && (
               <div style={{
                 background: risparmioPositivo ? C.redDim : C.greenDim,
@@ -813,12 +778,9 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
 
   const eliminaBolletta = async (id) => {
     setLoading(true);
-    // Trova la fornitura della bolletta prima di eliminarla
     const bolletta = bollette.find(b => b.id === id);
     const fornituraId = bolletta?.fornitura_id;
-    // Elimina la bolletta
     await supabase.from("bollette").delete().eq("id", id);
-    // Se era l'ultima bolletta di quella fornitura, elimina anche la fornitura
     if (fornituraId) {
       const rimaste = bollette.filter(b => b.id !== id && b.fornitura_id === fornituraId);
       if (rimaste.length === 0) {
@@ -838,7 +800,6 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
     onRefresh?.();
   };
 
-  // Ultimi indici salvati
   const ultimoPUN = [...indici].filter(i => i.tipo_indice === "PUN").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
   const ultimoPSV = [...indici].filter(i => i.tipo_indice === "PSV").sort((a,b) => b.mese_anno.localeCompare(a.mese_anno))[0];
 
@@ -849,7 +810,6 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
         <h2 style={{ color:C.text, fontSize:24, fontWeight:800, margin:0, fontFamily:"'Sora',sans-serif" }}>Impostazioni</h2>
       </div>
 
-      {/* Avatar */}
       <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:20, display:"flex", alignItems:"center", gap:16 }}>
         <div style={{ width:56, height:56, borderRadius:"50%", background:`linear-gradient(135deg,${C.amber},#ef4444)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:20, fontWeight:800, color:"#fff", flexShrink:0 }}>
           {nomeUtente.slice(0,2).toUpperCase()}
@@ -861,7 +821,6 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
         </div>
       </div>
 
-      {/* Indici mercato — sola visualizzazione, aggiornamento via GitHub Action */}
       {(ultimoPUN || ultimoPSV) && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
@@ -885,7 +844,6 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
         </div>
       )}
 
-      {/* Forniture con nickname */}
       {forniture.length > 0 && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:"0 0 14px" }}>Le tue forniture</p>
@@ -937,7 +895,6 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
         </div>
       )}
 
-      {/* Lista bollette con elimina */}
       {tuttiOrdinate.length > 0 && (
         <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:18 }}>
           <p style={{ color:C.text, fontSize:14, fontWeight:700, margin:"0 0 14px" }}>Bollette salvate</p>
@@ -982,14 +939,29 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
           })}
         </div>
       )}
+      
+      {/* SEZIONE ACCOUNT DELETION */}
+      <div style={{ display:"flex", flexDirection:"column", gap:10, marginTop:10 }}>
+        <button onClick={onSignOut} style={{ background:C.surface, border:`1px solid #ef444440`, borderRadius:16, padding:16, cursor:"pointer", color:"#ef4444", fontSize:14, fontWeight:600, textAlign:"center" }}>
+          Esci dall'account
+        </button>
+        <button 
+          onClick={async () => {
+            if (window.confirm("Sei sicuro di voler eliminare definitivamente il tuo account e tutti i tuoi dati? L'operazione è irreversibile.")) {
+              setLoading(true);
+              await supabase.rpc('delete_user_account');
+              onSignOut();
+            }
+          }} 
+          disabled={loading}
+          style={{ background:"transparent", border:`1px solid transparent`, padding:10, cursor:"pointer", color:C.textDim, fontSize:13, fontWeight:500, textAlign:"center" }}>
+          Elimina account definitivamente
+        </button>
+      </div>
 
-      <button onClick={onSignOut} style={{ background:C.surface, border:`1px solid #ef444440`, borderRadius:16, padding:16, cursor:"pointer", color:"#ef4444", fontSize:14, fontWeight:600, textAlign:"center" }}>
-        Esci dall'account
-      </button>
     </div>
   );
 }
-
 
 export default function AppShell({ user, dati, onSignOut, onRefresh }) {
   const [tab, setTab] = useState("home");

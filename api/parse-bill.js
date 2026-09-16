@@ -1,6 +1,6 @@
 // api/parse-bill.js
-// Primario:  Groq (Modelli di Produzione 2026)
-// Fallback:  OpenRouter (Modelli gratuiti)
+// Primario:  Groq (Testo + Vision)
+// Fallback:  OpenRouter (Testo + Vision)
 
 const GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -56,39 +56,25 @@ function extractPrezzoRegex(testo) {
   return null;
 }
 
-// Nuovi modelli presi direttamente dalla Dashboard Groq attuale
-const GROQ_MODELS = [
-  "qwen/qwen3.6-27b",     // Il più stabile per il parsing
-  "openai/gpt-oss-120b",  // Molto intelligente ma limiti severi (ecco perché tagliamo il testo)
-  "qwen/qwen3.8-27b"      // Backup aggiuntivo della famiglia Qwen
-];
-
-async function callGroq(model, messages, apiKey) {
+async function callGroq(model, messages, apiKey, isVision) {
+  // Nei modelli multimodali (vision) evitiamo di forzare type: json_object per evitare crash
+  const extraParams = isVision ? {} : { response_format: { type: "json_object" } };
   const res = await fetch(GROQ_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-    body: JSON.stringify({ 
-      model, 
-      messages, 
-      temperature: 0.1, 
-      max_tokens: 800, // Limite abbassato per evitare l'Error 429 Rate Limit
-      response_format: { type: "json_object" } // FORZA IL JSON CORRETTO
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.1,
+      max_tokens: 800,
+      ...extraParams
     }),
   });
   const data = await res.json();
-  if (!res.ok) {
-    const msg = data?.error?.message ?? JSON.stringify(data);
-    throw new Error(`${msg}`);
-  }
+  if (!res.ok) throw new Error(data?.error?.message ?? JSON.stringify(data));
   console.log(`[Groq] ${model} OK`);
   return data.choices?.[0]?.message?.content ?? "";
 }
-
-// Modelli storici OpenRouter ad altissima disponibilità
-const OR_FALLBACK_MODELS = [
-  "mistralai/mistral-7b-instruct:free",
-  "openchat/openchat-7b:free"
-];
 
 async function callOpenRouter(model, messages, apiKey) {
   const res = await fetch(OPENROUTER_URL, {
@@ -99,18 +85,15 @@ async function callOpenRouter(model, messages, apiKey) {
       "HTTP-Referer": "https://energyiq-omega.vercel.app",
       "X-Title": "EnergyIQ",
     },
-    body: JSON.stringify({ 
-      model, 
-      messages, 
-      temperature: 0.1, 
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.1,
       max_tokens: 800
     }),
   });
   const data = await res.json();
-  if (!res.ok) {
-    const msg = data?.error?.message ?? JSON.stringify(data);
-    throw new Error(`${msg}`);
-  }
+  if (!res.ok) throw new Error(data?.error?.message ?? JSON.stringify(data));
   console.log(`[OR] ${model} OK`);
   return data.choices?.[0]?.message?.content ?? "";
 }
@@ -135,8 +118,7 @@ export default async function handler(req, res) {
   const groqKey = process.env.GROQ_API_KEY;
   const orKey   = process.env.OPENROUTER_API_KEY;
 
-  if (!groqKey && !orKey)
-    return res.status(500).json({ error: "Nessuna API key configurata" });
+  if (!groqKey && !orKey) return res.status(500).json({ error: "Nessuna API key configurata" });
 
   try {
     const body = await new Promise((resolve, reject) => {
@@ -146,25 +128,48 @@ export default async function handler(req, res) {
       req.on("error", reject);
     });
 
-    if (body.type !== "text")
-      return res.status(400).json({ error: "Solo PDF supportato (type: text)" });
-    if (!body.text || body.text.trim().length < 30)
-      return res.status(400).json({ error: "Testo troppo corto" });
+    let messages;
+    let isVision = false;
+    let testoPerRegex = "";
 
-    // TAGLIO A 6000 CARATTERI: Previene il superamento del limite "8000 TPM" dei piani gratuiti
-    const testo = body.text.slice(0, 6000); 
-    console.log(`[parse-bill] ${testo.length} chars elaborati.`);
-
-    const messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testo}` }];
+    // ── GESTIONE INPUT (PDF vs FOTO) ──
+    if (body.type === "text") {
+      if (!body.text || body.text.trim().length < 30) return res.status(400).json({ error: "Testo troppo corto" });
+      testoPerRegex = body.text.slice(0, 6000);
+      console.log(`[parse-bill] PDF - ${testoPerRegex.length} chars elaborati.`);
+      messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testoPerRegex}` }];
+    } else if (body.type === "image") {
+      console.log(`[parse-bill] FOTO/SCREENSHOT rilevato.`);
+      isVision = true;
+      messages = [{
+        role: "user",
+        content: [
+          { type: "text", text: PROMPT },
+          { type: "image_url", image_url: { url: `data:${body.mimeType};base64,${body.data}` } }
+        ]
+      }];
+    } else {
+      return res.status(400).json({ error: "Formato non supportato" });
+    }
 
     let parsed = null;
     const errors = [];
 
+    // ── SCELTA MODELLI (Vision vs Text) ──
+    const GROQ_MODELS = isVision 
+      ? ["llama-3.2-90b-vision-preview"] 
+      : ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
+      
+    const OR_MODELS = isVision 
+      ? ["google/gemini-2.5-flash-free"] 
+      : ["mistralai/mistral-7b-instruct:free", "openchat/openchat-7b:free"];
+
+    // TENTATIVO 1: Groq
     if (groqKey) {
       for (const model of GROQ_MODELS) {
         try {
           console.log(`[parse-bill] Provo Groq: ${model}...`);
-          parsed = parseJson(await callGroq(model, messages, groqKey));
+          parsed = parseJson(await callGroq(model, messages, groqKey, isVision));
           break;
         } catch (e) {
           console.error(`[parse-bill] Groq ${model} fallito: ${e.message}`);
@@ -174,8 +179,9 @@ export default async function handler(req, res) {
       }
     }
 
+    // TENTATIVO 2: OpenRouter
     if (!parsed && orKey) {
-      for (const model of OR_FALLBACK_MODELS) {
+      for (const model of OR_MODELS) {
         try {
           console.log(`[parse-bill] Provo OpenRouter: ${model}...`);
           parsed = parseJson(await callOpenRouter(model, messages, orKey));
@@ -193,16 +199,15 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico. Riprova tra poco.", detail: errors.join(" | ") });
     }
 
-    if (!parsed.pod_pdr)
-      return res.status(422).json({ error: "POD o PDR non trovato nella bolletta." });
+    if (!parsed.pod_pdr) return res.status(422).json({ error: "POD o PDR non trovato nella bolletta." });
 
+    // ── POST-PROCESSING PREZZO ──
     if (body.prezzo_override != null) {
       parsed.prezzo_materia_prima = body.prezzo_override;
-    } else {
-      const prezzoRegex = extractPrezzoRegex(testo);
-      if (prezzoRegex !== null) {
-        parsed.prezzo_materia_prima = prezzoRegex;
-      }
+    } else if (!isVision) {
+      // Il Regex lato server funziona solo sul testo estratto dai PDF
+      const prezzoRegex = extractPrezzoRegex(testoPerRegex);
+      if (prezzoRegex !== null) parsed.prezzo_materia_prima = prezzoRegex;
     }
 
     return res.status(200).json({ ok: true, data: parsed });
@@ -212,5 +217,4 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
-
 export const config = { maxDuration: 60 };
