@@ -140,7 +140,8 @@ export default async function handler(req, res) {
       console.log(`[parse-bill] FOTO rilevata. Inizio routine Gemini.`);
       if (!geminiKey) return res.status(500).json({ error: "API Key di Gemini non configurata su Vercel." });
       
-      const GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+      // Modelli aggiornati in base ai suggerimenti di errore di Google
+      const GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash-lite"];
       
       for (const model of GEMINI_MODELS) {
         try {
