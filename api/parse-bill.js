@@ -217,7 +217,7 @@ export default async function handler(req, res) {
       
       // Messaggio di errore personalizzato se la rete gratuita per le foto è tutta intasata
       if (isVision) {
-        return res.status(502).json({ error: "I server AI gratuiti per le immagini sono momentaneamente pieni. Riprova tra un minuto, oppure carica la bolletta in formato PDF." });
+        return res.status(502).json({ error: "I server AI per le immagini sono momentaneamente pieni. Riprova tra un minuto, oppure carica la bolletta in formato PDF." });
       }
       return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico. Riprova tra poco.", detail: errors.join(" | ") });
     }
