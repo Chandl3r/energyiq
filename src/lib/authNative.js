@@ -1,7 +1,7 @@
 // src/lib/authNative.js
-// Gestisce il flusso Google OAuth in ambiente nativo (Capacitor).
+// Gestisce il flusso OAuth in ambiente nativo (Capacitor).
 // Su web usa il redirect standard; su native apre il browser di sistema
-// e torna all'app via deep link energyiq://auth/callback.
+// e torna all'app via deep link.
 
 import { Capacitor } from '@capacitor/core';
 import { Browser }   from '@capacitor/browser';
@@ -9,10 +9,13 @@ import { supabase }  from './supabase';
 
 export const isNative = Capacitor.isNativePlatform();
 
+// ATTENZIONE: Questo schema (energyiq) deve combaciare ESATTAMENTE con Xcode e Android
+const DEEP_LINK_URL = 'energyiq://auth/callback';
+
 // Redirect URL in base all'ambiente
 export const getRedirectUrl = () =>
   isNative
-    ? 'energyiq://auth/callback'
+    ? DEEP_LINK_URL
     : window.location.origin;
 
 // Sign in con Google
@@ -22,7 +25,7 @@ export async function signInWithGoogle() {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: 'energyiq://auth/callback',
+        redirectTo: DEEP_LINK_URL,
         skipBrowserRedirect: true,   // NON aprire window.location — lo facciamo noi
       },
     });
@@ -40,6 +43,34 @@ export async function signInWithGoogle() {
     // Web: redirect normale
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) throw error;
+  }
+}
+
+// Sign in con Apple
+export async function signInWithApple() {
+  if (isNative) {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'apple',
+      options: {
+        redirectTo: DEEP_LINK_URL,
+        skipBrowserRedirect: true,
+      },
+    });
+    if (error) throw error;
+
+    if (data?.url) {
+      await Browser.open({
+        url:        data.url,
+        windowName: '_self',
+        presentationStyle: 'popover',
+      });
+    }
+  } else {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'apple',
       options: { redirectTo: window.location.origin },
     });
     if (error) throw error;

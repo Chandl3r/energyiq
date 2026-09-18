@@ -19,6 +19,7 @@
     "@capacitor/splash-screen": "^8.0.2",
     "@capacitor/status-bar": "^8.0.3",
     "@supabase/supabase-js": "^2.98.0",
+    "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.577.0",
     "pdf-parse": "^2.4.5",
     "pdfjs-dist": "^5.5.207",

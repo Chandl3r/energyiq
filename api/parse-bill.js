@@ -1,8 +1,7 @@
 // api/parse-bill.js
-// Doppio Binario ZERO COSTI: Groq per i PDF, OpenRouter (con tappeto di fallback) per le Foto
+// Doppio Binario: Groq (gratuiti) per i PDF, API ufficiale Google Gemini per le Foto
 
-const GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions";
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const PROMPT = `Analizza questa bolletta energetica italiana ed estrai i dati nel seguente formato JSON.
 Rispondi SOLO ed ESCLUSIVAMENTE con il JSON strutturato esattamente in questo modo, senza backtick o testo aggiuntivo.
@@ -55,6 +54,7 @@ function extractPrezzoRegex(testo) {
   return null;
 }
 
+// Funzione per chiamare Groq (PDF Testuali)
 async function callGroq(model, messages, apiKey) {
   const res = await fetch(GROQ_URL, {
     method: "POST",
@@ -73,26 +73,33 @@ async function callGroq(model, messages, apiKey) {
   return data.choices?.[0]?.message?.content ?? "";
 }
 
-async function callOpenRouter(model, messages, apiKey) {
-  const res = await fetch(OPENROUTER_URL, {
+// Funzione diretta per Google Gemini API (Immagini/Foto)
+async function callGeminiDirect(prompt, base64Data, mimeType, apiKey) {
+  // Usiamo gemini-2.5-pro, il modello migliore per estrazione complessa da immagini
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`;
+  
+  const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-      "HTTP-Referer": "https://energyiq-omega.vercel.app",
-      "X-Title": "EnergyIQ",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.1,
-      max_tokens: 800
-    }),
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inline_data: { mime_type: mimeType, data: base64Data } }
+        ]
+      }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        temperature: 0.1
+      }
+    })
   });
+  
   const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message ?? JSON.stringify(data));
-  console.log(`[OR] ${model} OK`);
-  return data.choices?.[0]?.message?.content ?? "";
+  if (!res.ok) throw new Error(data.error?.message || "Errore Gemini API");
+  
+  console.log(`[Gemini Direct] OK`);
+  return data.candidates[0].content.parts[0].text;
 }
 
 function parseJson(raw) {
@@ -112,10 +119,10 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST")    return res.status(405).json({ error: "Method not allowed" });
 
-  const groqKey = process.env.GROQ_API_KEY;
-  const orKey   = process.env.OPENROUTER_API_KEY;
+  const groqKey   = process.env.GROQ_API_KEY;
+  const geminiKey = process.env.GEMINI_API_KEY;
 
-  if (!groqKey && !orKey) return res.status(500).json({ error: "Nessuna API key configurata" });
+  if (!groqKey && !geminiKey) return res.status(500).json({ error: "API keys non configurate" });
 
   try {
     const body = await new Promise((resolve, reject) => {
@@ -125,109 +132,56 @@ export default async function handler(req, res) {
       req.on("error", reject);
     });
 
-    let messages;
-    let isVision = false;
+    let parsed = null;
     let testoPerRegex = "";
+    const errors = [];
 
-    // ── GESTIONE INPUT (PDF vs FOTO) ──
-    if (body.type === "text") {
+    // ── GESTIONE IMMAGINI (FOTO) ──
+    if (body.type === "image") {
+      console.log(`[parse-bill] FOTO rilevata. Uso Gemini Direct.`);
+      if (!geminiKey) return res.status(500).json({ error: "API Key di Gemini non configurata su Vercel." });
+      
+      try {
+        parsed = parseJson(await callGeminiDirect(PROMPT, body.data, body.mimeType, geminiKey));
+      } catch (e) {
+        console.error(`[parse-bill] Gemini fallito: ${e.message}`);
+        return res.status(502).json({ error: "Analisi immagine fallita.", detail: e.message });
+      }
+    } 
+    // ── GESTIONE TESTO (PDF) ──
+    else if (body.type === "text") {
       if (!body.text || body.text.trim().length < 30) return res.status(400).json({ error: "Testo PDF non leggibile." });
       testoPerRegex = body.text.slice(0, 6000);
-      console.log(`[parse-bill] PDF - ${testoPerRegex.length} chars.`);
-      messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testoPerRegex}` }];
-    } else if (body.type === "image") {
-      console.log(`[parse-bill] FOTO/SCREENSHOT rilevato.`);
-      isVision = true;
-      messages = [{
-        role: "user",
-        content: [
-          { type: "text", text: PROMPT },
-          { type: "image_url", image_url: { url: `data:${body.mimeType};base64,${body.data}` } }
-        ]
-      }];
+      console.log(`[parse-bill] PDF rilevato - Uso Groq.`);
+      
+      const messages = [{ role: "user", content: `${PROMPT}\n\nTESTO BOLLETTA:\n${testoPerRegex}` }];
+      const GROQ_TEXT_MODELS = ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
+
+      if (groqKey) {
+        for (const model of GROQ_TEXT_MODELS) {
+          try {
+            parsed = parseJson(await callGroq(model, messages, groqKey));
+            break; // Se ha successo, esci dal ciclo
+          } catch (e) {
+            console.error(`[parse-bill] Groq ${model} fallito: ${e.message}`);
+            errors.push(`Groq (${model}): ${e.message}`);
+          }
+        }
+      }
+
+      if (!parsed) {
+        return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico per i PDF. Riprova tra poco.", detail: errors.join(" | ") });
+      }
     } else {
       return res.status(400).json({ error: "Formato non supportato" });
     }
 
-    let parsed = null;
-    const errors = [];
-
-    // ── SCELTA MODELLI ──
-    const GROQ_TEXT_MODELS = ["qwen/qwen3.6-27b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
-    const OR_TEXT_MODELS   = ["mistralai/mistral-7b-instruct:free", "openchat/openchat-7b:free"];
-    
-    // Tappeto di modelli Vision GRATUITI attivi su OpenRouter. Se uno è pieno, prova il successivo.
-    const OR_VISION_MODELS = [
-      "google/gemini-2.0-flash-exp:free", 
-      "google/gemini-2.0-flash-thinking-exp:free",
-      "meta-llama/llama-3.2-90b-vision-instruct:free",
-      "meta-llama/llama-3.2-11b-vision-instruct:free",
-      "qwen/qwen-2-vl-72b-instruct:free",
-      "qwen/qwen-2-vl-7b-instruct:free"
-    ];
-
-    // ── ESECUZIONE ──
-    if (isVision) {
-      if (orKey) {
-        for (const model of OR_VISION_MODELS) {
-          try {
-            console.log(`[parse-bill] Provo Vision OR: ${model}...`);
-            parsed = parseJson(await callOpenRouter(model, messages, orKey));
-            break;
-          } catch (e) {
-            console.error(`[parse-bill] Vision OR ${model} fallito: ${e.message}`);
-            errors.push(`Vision OR (${model}): ${e.message}`);
-            // Breve pausa per evitare che OpenRouter ci blocchi per troppe chiamate simultanee
-            await new Promise(r => setTimeout(r, 1500));
-          }
-        }
-      }
-    } else {
-      // PDF Flow (invariato)
-      if (groqKey) {
-        for (const model of GROQ_TEXT_MODELS) {
-          try {
-            console.log(`[parse-bill] Provo Text Groq: ${model}...`);
-            parsed = parseJson(await callGroq(model, messages, groqKey));
-            break;
-          } catch (e) {
-            console.error(`[parse-bill] Text Groq ${model} fallito: ${e.message}`);
-            errors.push(`Groq (${model}): ${e.message}`);
-            await new Promise(r => setTimeout(r, 1000));
-          }
-        }
-      }
-      if (!parsed && orKey) {
-        for (const model of OR_TEXT_MODELS) {
-          try {
-            console.log(`[parse-bill] Provo Text OR: ${model}...`);
-            parsed = parseJson(await callOpenRouter(model, messages, orKey));
-            break;
-          } catch (e) {
-            console.error(`[parse-bill] Text OR ${model} fallito: ${e.message}`);
-            errors.push(`OR (${model}): ${e.message}`);
-            await new Promise(r => setTimeout(r, 1000));
-          }
-        }
-      }
-    }
-
-    if (!parsed) {
-      console.error("[parse-bill] Tutti i modelli falliti. Errori:", errors);
-      
-      // Messaggio di errore personalizzato se la rete gratuita per le foto è tutta intasata
-      if (isVision) {
-        return res.status(502).json({ error: "I server AI per le immagini sono momentaneamente pieni. Riprova tra un minuto, oppure carica la bolletta in formato PDF." });
-      }
-      return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico. Riprova tra poco.", detail: errors.join(" | ") });
-    }
-
-    if (!parsed.pod_pdr) return res.status(422).json({ error: "POD o PDR non trovato nell'immagine o nel documento." });
+    if (!parsed || !parsed.pod_pdr) return res.status(422).json({ error: "Dati non trovati nel documento." });
 
     // ── POST-PROCESSING PREZZO ──
     if (body.prezzo_override != null) {
       parsed.prezzo_materia_prima = body.prezzo_override;
-    } else if (!isVision) {
+    } else if (body.type === "text") {
       const prezzoRegex = extractPrezzoRegex(testoPerRegex);
       if (prezzoRegex !== null) parsed.prezzo_materia_prima = prezzoRegex;
     }
