@@ -1,5 +1,5 @@
 // api/parse-bill.js
-// Doppio Binario: Groq (gratuiti) per i PDF, API ufficiale Google Gemini per le Foto
+// Doppio Binario: Groq (gratuiti) per i PDF, API ufficiale Google Gemini per le Foto con Fallback
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -74,9 +74,8 @@ async function callGroq(model, messages, apiKey) {
 }
 
 // Funzione diretta per Google Gemini API (Immagini/Foto)
-async function callGeminiDirect(prompt, base64Data, mimeType, apiKey) {
-  // Utilizziamo il modello dinamico gemini-flash-latest presente nel tuo account
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+async function callGeminiDirect(prompt, base64Data, mimeType, apiKey, modelName) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
   
   const res = await fetch(url, {
     method: "POST",
@@ -98,7 +97,7 @@ async function callGeminiDirect(prompt, base64Data, mimeType, apiKey) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || "Errore Gemini API");
   
-  console.log(`[Gemini Direct] OK`);
+  console.log(`[Gemini Direct] ${modelName} OK`);
   return data.candidates[0].content.parts[0].text;
 }
 
@@ -138,14 +137,23 @@ export default async function handler(req, res) {
 
     // ── GESTIONE IMMAGINI (FOTO) ──
     if (body.type === "image") {
-      console.log(`[parse-bill] FOTO rilevata. Uso Gemini Direct.`);
+      console.log(`[parse-bill] FOTO rilevata. Inizio routine Gemini.`);
       if (!geminiKey) return res.status(500).json({ error: "API Key di Gemini non configurata su Vercel." });
       
-      try {
-        parsed = parseJson(await callGeminiDirect(PROMPT, body.data, body.mimeType, geminiKey));
-      } catch (e) {
-        console.error(`[parse-bill] Gemini fallito: ${e.message}`);
-        return res.status(502).json({ error: "Analisi immagine fallita.", detail: e.message });
+      const GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+      
+      for (const model of GEMINI_MODELS) {
+        try {
+          parsed = parseJson(await callGeminiDirect(PROMPT, body.data, body.mimeType, geminiKey, model));
+          break; 
+        } catch (e) {
+          console.error(`[parse-bill] Gemini ${model} fallito: ${e.message}`);
+          errors.push(`Gemini (${model}): ${e.message}`);
+        }
+      }
+
+      if (!parsed) {
+        return res.status(502).json({ error: "Servizio Google AI momentaneamente sovraccarico per le immagini. Riprova.", detail: errors.join(" | ") });
       }
     } 
     // ── GESTIONE TESTO (PDF) ──
@@ -161,7 +169,7 @@ export default async function handler(req, res) {
         for (const model of GROQ_TEXT_MODELS) {
           try {
             parsed = parseJson(await callGroq(model, messages, groqKey));
-            break; // Se ha successo, esci dal ciclo
+            break; 
           } catch (e) {
             console.error(`[parse-bill] Groq ${model} fallito: ${e.message}`);
             errors.push(`Groq (${model}): ${e.message}`);
