@@ -1,6 +1,6 @@
 // src/components/UploadScreen.jsx
 // PDF  → pdfjs-dist (npm, bundled da Vite) → estrae testo → manda testo al server
-// Immagine → base64 → server
+// Immagine → compressione HTML5 Canvas → base64 → server
 
 import { useState, useRef } from "react";
 import { Camera, FileText, CheckCircle, AlertCircle, Loader2, Save, RotateCcw } from "lucide-react";
@@ -39,7 +39,6 @@ function extractPrezzoFromText(raw) {
 }
 
 async function extractPdfText(file) {
-  // FIX PER iOS: Utilizziamo FileReader invece di file.arrayBuffer() per massima compatibilità
   const arrayBuffer = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
@@ -47,16 +46,13 @@ async function extractPdfText(file) {
     reader.readAsArrayBuffer(file);
   });
 
-  // FIX PER iOS: Convertiamo in Uint8Array, formato richiesto da pdf.js per evitare crash
   const typedarray = new Uint8Array(arrayBuffer);
-  
   const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
   let text = "";
   
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    // FIX PER iOS: Controllo di sicurezza se "items" è indefinito
     if (content && content.items) {
       text += content.items.map(item => item.str || "").join(" ") + "\n";
     }
@@ -88,12 +84,45 @@ async function extractPdfText(file) {
   return { testoLLM, prezzoOverride };
 }
 
-function fileToBase64(file) {
+// Nuova funzione per comprimere le foto sul telefono prima dell'invio
+function compressAndEncodeImage(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result.split(",")[1]);
-    reader.onerror = reject;
     reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_WIDTH = 1500;
+        const MAX_HEIGHT = 1500;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Comprime in formato JPEG riducendo la qualità al 75%
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+        resolve(dataUrl.split(",")[1]);
+      };
+      img.onerror = reject;
+    };
+    reader.onerror = reject;
   });
 }
 
@@ -123,9 +152,9 @@ export default function UploadScreen({ user, onBollettaSaved }) {
 
         payload = { type: "text", text: testo, ...(prezzoOverride !== null && { prezzo_override: prezzoOverride }) };
       } else {
-        const b64  = await fileToBase64(file);
-        const mime = file.type || "image/jpeg";
-        payload = { type: "image", mimeType: mime, data: b64 };
+        // Usa il nuovo motore di compressione per le immagini
+        const b64  = await compressAndEncodeImage(file);
+        payload = { type: "image", mimeType: "image/jpeg", data: b64 };
       }
 
       const res  = await fetch("https://energyiq-omega.vercel.app/api/parse-bill", {
@@ -133,7 +162,14 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify(payload),
       });
-      const json = await res.json();
+      
+      let json;
+      try {
+        json = await res.json();
+      } catch (parseError) {
+        throw new Error("Il server ha impiegato troppo tempo a rispondere (Timeout). Riprova con una foto meglio inquadrata o usa il PDF.");
+      }
+      
       if (!res.ok) throw new Error(json.detail ?? json.error ?? `HTTP ${res.status}`);
 
       setDatiEstrat(json.data);
