@@ -75,8 +75,8 @@ async function callGroq(model, messages, apiKey) {
 
 // Funzione diretta per Google Gemini API (Immagini/Foto)
 async function callGeminiDirect(prompt, base64Data, mimeType, apiKey) {
-  // Usiamo il modello Flash di ultima generazione con piano gratuito attivo
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash:generateContent?key=${apiKey}`;
+  // Utilizziamo il modello dinamico gemini-flash-latest presente nel tuo account
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
   
   const res = await fetch(url, {
     method: "POST",
