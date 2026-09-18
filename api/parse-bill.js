@@ -30,12 +30,12 @@ Rispondi SOLO ed ESCLUSIVAMENTE con il JSON strutturato esattamente in questo mo
 
 Regole OBBLIGATORIE:
 1. tipo_utenza: elettricità/luce = LUCE, gas = GAS
-2. pod_pdr: per luce il codice POD inizia con "IT", per gas il PDR è numerico.
+2. pod_pdr: per luce il codice POD inizia con "IT", per gas il PDR è numerico. Se non lo trovi restituisci null.
 3. consumo_fatturato: il consumo del PERIODO di questa bolletta.
 4. consumo_annuo: il consumo annuale dalla sezione "CONSUMO ANNUO".
 5. prezzo_materia_prima: prendi il prezzo DAL BOX DELL'OFFERTA, NON dallo Scontrino. Estrai solo il numero (es 0.12636).
 6. storico_mensile: estrai TUTTI i mesi. Formato: "mese": YYYY-MM, "consumo": numero effettivo. Se assente, usa [].
-7. Se un campo non e presente usa null.`;
+7. Se un campo non è presente usa null.`;
 
 function extractPrezzoRegex(testo) {
   const patterns = [
@@ -140,7 +140,6 @@ export default async function handler(req, res) {
       console.log(`[parse-bill] FOTO rilevata. Inizio routine Gemini.`);
       if (!geminiKey) return res.status(500).json({ error: "API Key di Gemini non configurata su Vercel." });
       
-      // Modelli aggiornati in base ai suggerimenti di errore di Google
       const GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash-lite"];
       
       for (const model of GEMINI_MODELS) {
@@ -185,7 +184,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Formato non supportato" });
     }
 
-    if (!parsed || !parsed.pod_pdr) return res.status(422).json({ error: "Dati non trovati nel documento." });
+    // Rimosso il blocco sul pod_pdr. Se il parse fallisce del tutto, blocchiamo.
+    if (!parsed || Object.keys(parsed).length === 0) {
+      return res.status(422).json({ error: "Dati non estratti correttamente dal documento." });
+    }
 
     // ── POST-PROCESSING PREZZO ──
     if (body.prezzo_override != null) {
