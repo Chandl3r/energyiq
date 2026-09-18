@@ -76,7 +76,7 @@ async function callGroq(model, messages, apiKey) {
 // Funzione diretta per Google Gemini API (Immagini/Foto)
 async function callGeminiDirect(prompt, base64Data, mimeType, apiKey) {
   // Aggiornato al modello gemini-3.1-pro-preview come richiesto da Google
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   
   const res = await fetch(url, {
     method: "POST",
