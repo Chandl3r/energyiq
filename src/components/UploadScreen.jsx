@@ -75,6 +75,7 @@ async function extractPdfText(file) {
   return { testoLLM, prezzoOverride };
 }
 
+// Compressione potenziata per evitare timeout con file multipli
 function compressAndEncodeImage(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -84,8 +85,9 @@ function compressAndEncodeImage(file) {
       img.src = event.target.result;
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        const MAX_WIDTH = 1500;
-        const MAX_HEIGHT = 1500;
+        // Ridotto a 1000px per snellire ulteriormente i dati e azzerare i tempi morti
+        const MAX_WIDTH = 1000;
+        const MAX_HEIGHT = 1000;
         let width = img.width;
         let height = img.height;
 
@@ -100,7 +102,8 @@ function compressAndEncodeImage(file) {
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, width, height);
         
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+        // Qualità ridotta al 60% per file leggerissimi
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.60);
         resolve(dataUrl.split(",")[1]);
       };
       img.onerror = reject;
@@ -149,7 +152,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       });
       
       let json;
-      try { json = await res.json(); } catch { throw new Error("Il server ha impiegato troppo tempo a rispondere."); }
+      try { json = await res.json(); } catch { throw new Error("Il server ha impiegato troppo tempo a rispondere. Prova a caricare meno foto alla volta."); }
       
       if (!res.ok) throw new Error(json.detail ?? json.error ?? `HTTP ${res.status}`);
 
@@ -415,4 +418,11 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
     </div>
   );
+}
+
+// Funzione re-inserita per formattare le date
+function fmt(iso) {
+  if (!iso) return "";
+  try { return new Date(iso).toLocaleDateString("it-IT", { month:"short", year:"numeric" }); }
+  catch { return iso; }
 }
