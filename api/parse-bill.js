@@ -1,5 +1,5 @@
 // api/parse-bill.js
-// Doppio Binario: Groq (gratuiti) per i PDF, API ufficiale Google Gemini per le Foto con Fallback
+// Doppio Binario: Groq per i PDF, API ufficiale Google Gemini per Foto Singole/Multiple con Fallback
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -33,7 +33,7 @@ Regole OBBLIGATORIE:
 2. pod_pdr: per luce il codice POD inizia con "IT", per gas il PDR è numerico. Se non lo trovi restituisci null.
 3. consumo_fatturato: il consumo del PERIODO di questa bolletta.
 4. consumo_annuo: il consumo annuale dalla sezione "CONSUMO ANNUO".
-5. prezzo_materia_prima: prendi il prezzo DAL BOX DELL'OFFERTA, NON dallo Scontrino. Estrai solo il numero (es 0.12636).
+5. prezzo_materia_prima: prendi il prezzo DAL BOX DELL'OFFERTA (es. Corrispettivo per il consumo, Prezzo energia). Estrai solo il numero (es 0.12636).
 6. storico_mensile: estrai TUTTI i mesi. Formato: "mese": YYYY-MM, "consumo": numero effettivo. Se assente, usa [].
 7. Se un campo non è presente usa null.`;
 
@@ -41,6 +41,7 @@ function extractPrezzoRegex(testo) {
   const patterns = [
     /Prezzo\s+Fisso\s*(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*[€euro]*\s*\/\s*(?:kWh|Smc)/i,
     /Prezzo\s+Energia\s*(?:Fisso\s*)?(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*[€euro]*\s*\/\s*(?:kWh|Smc)/i,
+    /Corrispettivo\s+per\s+il\s+consumo(?:[\s\S]{0,100}?)(0[,.][\d]{4,6})/i,
     /=\s*(0[,.][\d]{4,6})\s*[€]\s*\/\s*kWh/,
     /=\s*(0[,.][\d]{4,6})\s*[€]\s*\/\s*Smc/,
   ];
@@ -54,7 +55,6 @@ function extractPrezzoRegex(testo) {
   return null;
 }
 
-// Funzione per chiamare Groq (PDF Testuali)
 async function callGroq(model, messages, apiKey) {
   const res = await fetch(GROQ_URL, {
     method: "POST",
@@ -73,24 +73,21 @@ async function callGroq(model, messages, apiKey) {
   return data.choices?.[0]?.message?.content ?? "";
 }
 
-// Funzione diretta per Google Gemini API (Immagini/Foto)
-async function callGeminiDirect(prompt, base64Data, mimeType, apiKey, modelName) {
+async function callGeminiDirect(prompt, images, apiKey, modelName) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
   
+  // Costruisce l'array delle parti combinando il testo e TUTTE le immagini ricevute
+  const parts = [{ text: prompt }];
+  for (const img of images) {
+    parts.push({ inline_data: { mime_type: img.mimeType, data: img.data } });
+  }
+
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{
-        parts: [
-          { text: prompt },
-          { inline_data: { mime_type: mimeType, data: base64Data } }
-        ]
-      }],
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 0.1
-      }
+      contents: [{ parts }],
+      generationConfig: { responseMimeType: "application/json", temperature: 0.1 }
     })
   });
   
@@ -135,16 +132,16 @@ export default async function handler(req, res) {
     let testoPerRegex = "";
     const errors = [];
 
-    // ── GESTIONE IMMAGINI (FOTO) ──
-    if (body.type === "image") {
-      console.log(`[parse-bill] FOTO rilevata. Inizio routine Gemini.`);
-      if (!geminiKey) return res.status(500).json({ error: "API Key di Gemini non configurata su Vercel." });
+    // ── GESTIONE IMMAGINI MULTIPLE (FOTO) ──
+    if (body.type === "images") {
+      console.log(`[parse-bill] Rilevate ${body.images.length} FOTO. Inizio routine Gemini.`);
+      if (!geminiKey) return res.status(500).json({ error: "API Key di Gemini non configurata." });
       
       const GEMINI_MODELS = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash-lite"];
       
       for (const model of GEMINI_MODELS) {
         try {
-          parsed = parseJson(await callGeminiDirect(PROMPT, body.data, body.mimeType, geminiKey, model));
+          parsed = parseJson(await callGeminiDirect(PROMPT, body.images, geminiKey, model));
           break; 
         } catch (e) {
           console.error(`[parse-bill] Gemini ${model} fallito: ${e.message}`);
@@ -152,9 +149,7 @@ export default async function handler(req, res) {
         }
       }
 
-      if (!parsed) {
-        return res.status(502).json({ error: "Servizio Google AI momentaneamente sovraccarico per le immagini. Riprova.", detail: errors.join(" | ") });
-      }
+      if (!parsed) return res.status(502).json({ error: "Servizio Google AI momentaneamente sovraccarico per le immagini. Riprova.", detail: errors.join(" | ") });
     } 
     // ── GESTIONE TESTO (PDF) ──
     else if (body.type === "text") {
@@ -176,15 +171,11 @@ export default async function handler(req, res) {
           }
         }
       }
-
-      if (!parsed) {
-        return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico per i PDF. Riprova tra poco.", detail: errors.join(" | ") });
-      }
+      if (!parsed) return res.status(502).json({ error: "Servizio AI momentaneamente sovraccarico per i PDF. Riprova tra poco.", detail: errors.join(" | ") });
     } else {
       return res.status(400).json({ error: "Formato non supportato" });
     }
 
-    // Rimosso il blocco sul pod_pdr. Se il parse fallisce del tutto, blocchiamo.
     if (!parsed || Object.keys(parsed).length === 0) {
       return res.status(422).json({ error: "Dati non estratti correttamente dal documento." });
     }

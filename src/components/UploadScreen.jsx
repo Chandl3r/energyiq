@@ -1,14 +1,10 @@
 // src/components/UploadScreen.jsx
-// PDF  → pdfjs-dist (npm, bundled da Vite) → estrae testo → manda testo al server
-// Immagine → compressione HTML5 Canvas → base64 → server
-
 import { useState, useRef } from "react";
 import { Camera, FileText, CheckCircle, AlertCircle, Loader2, Save, RotateCcw } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker?url";
 
-// Configura il worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 const C = {
@@ -25,6 +21,7 @@ function extractPrezzoFromText(raw) {
   const patterns = [
     /Prezzo\s+Fisso\s*(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*€\s*\/\s*(?:kWh|Smc)/i,
     /Prezzo\s+Energia\s*(?:Fisso\s*)?(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*€\s*\/\s*(?:kWh|Smc)/i,
+    /Corrispettivo\s+per\s+il\s+consumo(?:[\s\S]{0,100}?)(0[,.][\d]{4,6})/i,
     /=\s*(0[,.][\d]{4,6})\s*€\s*\/\s*kWh/,
     /=\s*(0[,.][\d]{4,6})\s*€\s*\/\s*Smc/,
   ];
@@ -67,17 +64,11 @@ async function extractPdfText(file) {
   } else {
     const INIZIO = raw.slice(0, 3500);
     const FINE   = raw.slice(-3000);
-    const idxStorico = raw.toLowerCase().search(
-      /storico|informazioni storiche|andamento consumi|consumo mensile|mesi precedenti/
-    );
-    const STORICO = idxStorico >= 0
-      ? raw.slice(Math.max(0, idxStorico - 200), Math.min(raw.length, idxStorico + 3000))
-      : "";
+    const idxStorico = raw.toLowerCase().search(/storico|informazioni storiche|andamento consumi|consumo mensile|mesi precedenti/);
+    const STORICO = idxStorico >= 0 ? raw.slice(Math.max(0, idxStorico - 200), Math.min(raw.length, idxStorico + 3000)) : "";
     const parts = [INIZIO];
-    if (STORICO && !INIZIO.includes(STORICO.slice(0, 60)))
-      parts.push("\n[...]\n" + STORICO);
-    if (!INIZIO.includes(FINE.slice(0, 60)) && !STORICO.includes(FINE.slice(0, 60)))
-      parts.push("\n[...]\n" + FINE);
+    if (STORICO && !INIZIO.includes(STORICO.slice(0, 60))) parts.push("\n[...]\n" + STORICO);
+    if (!INIZIO.includes(FINE.slice(0, 60)) && !STORICO.includes(FINE.slice(0, 60))) parts.push("\n[...]\n" + FINE);
     testoLLM = parts.join("").slice(0, 10000);
   }
 
@@ -99,15 +90,9 @@ function compressAndEncodeImage(file) {
         let height = img.height;
 
         if (width > height) {
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-          }
+          if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
         } else {
-          if (height > MAX_HEIGHT) {
-            width *= MAX_HEIGHT / height;
-            height = MAX_HEIGHT;
-          }
+          if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
         }
         
         canvas.width = width;
@@ -134,38 +119,37 @@ export default function UploadScreen({ user, onBollettaSaved }) {
 
   const reset = () => { setFase("idle"); setErrore(null); setDatiEstrat(null); setFileName(null); };
 
-  const parseFile = async (file) => {
-    setFileName(file.name);
+  const parseFiles = async (files) => {
+    if (!files || files.length === 0) return;
+    setFileName(files.length === 1 ? files[0].name : `${files.length} foto selezionate`);
     setFase("parsing");
     setErrore(null);
     try {
-      const isPdf = file.type === "application/pdf" || file.name?.endsWith(".pdf");
+      const firstFile = files[0];
+      const isPdf = firstFile.type === "application/pdf" || firstFile.name?.endsWith(".pdf");
       let payload;
 
       if (isPdf) {
-        const { testoLLM, prezzoOverride } = await extractPdfText(file);
-        const testo = testoLLM;
-        if (!testo || testo.length < 50)
-          throw new Error("PDF senza testo selezionabile. Riprova con un altro documento.");
-
-        payload = { type: "text", text: testo, ...(prezzoOverride !== null && { prezzo_override: prezzoOverride }) };
+        const { testoLLM, prezzoOverride } = await extractPdfText(firstFile);
+        if (!testoLLM || testoLLM.length < 50) throw new Error("PDF senza testo selezionabile.");
+        payload = { type: "text", text: testoLLM, ...(prezzoOverride !== null && { prezzo_override: prezzoOverride }) };
       } else {
-        const b64  = await compressAndEncodeImage(file);
-        payload = { type: "image", mimeType: "image/jpeg", data: b64 };
+        const imagesData = [];
+        for (const file of files) {
+          const b64 = await compressAndEncodeImage(file);
+          imagesData.push({ mimeType: "image/jpeg", data: b64 });
+        }
+        payload = { type: "images", images: imagesData };
       }
 
-      const res  = await fetch("https://energyiq-omega.vercel.app/api/parse-bill", {
-        method:  "POST",
+      const res = await fetch("https://energyiq-omega.vercel.app/api/parse-bill", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(payload),
+        body: JSON.stringify(payload),
       });
       
       let json;
-      try {
-        json = await res.json();
-      } catch (parseError) {
-        throw new Error("Il server ha impiegato troppo tempo a rispondere. Riprova con una foto meglio inquadrata.");
-      }
+      try { json = await res.json(); } catch { throw new Error("Il server ha impiegato troppo tempo a rispondere."); }
       
       if (!res.ok) throw new Error(json.detail ?? json.error ?? `HTTP ${res.status}`);
 
@@ -210,52 +194,40 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         totale_pagare:         normalizzaNumero(datiEstrat.totale_pagare),
         prezzo_materia_prima:  normalizzaNumero(datiEstrat.prezzo_materia_prima),
       };
-      const podPdr = d.pod_pdr; // Adesso è garantito che esista per poter salvare
+      const podPdr = d.pod_pdr;
 
       const { data: esistente, error: errQ } = await supabase
-        .from("forniture").select("id")
-        .eq("utente_id", user.id).eq("pod_pdr", podPdr).maybeSingle();
+        .from("forniture").select("id").eq("utente_id", user.id).eq("pod_pdr", podPdr).maybeSingle();
       if (errQ) throw new Error(`Errore ricerca fornitura: ${errQ.message}`);
 
       let fornituraId;
       if (esistente) {
         fornituraId = esistente.id;
-        if (d.intestatario)
-          await supabase.from("forniture").update({ intestatario: d.intestatario }).eq("id", fornituraId);
+        if (d.intestatario) await supabase.from("forniture").update({ intestatario: d.intestatario }).eq("id", fornituraId);
       } else {
         const { data: nuova, error: errF } = await supabase
           .from("forniture").insert({
-            utente_id:             user.id,
-            tipo_utenza:           d.tipo_utenza ?? "LUCE",
-            pod_pdr:               podPdr,
-            fornitore:             d.fornitore ?? "Sconosciuto",
-            nome_offerta:          d.nome_offerta,
-            intestatario:          d.intestatario,
-            data_scadenza_offerta: d.data_scadenza_offerta,
+            utente_id: user.id, tipo_utenza: d.tipo_utenza ?? "LUCE", pod_pdr: podPdr,
+            fornitore: d.fornitore ?? "Sconosciuto", nome_offerta: d.nome_offerta,
+            intestatario: d.intestatario, data_scadenza_offerta: d.data_scadenza_offerta,
           }).select("id").single();
         if (errF) throw new Error(`Errore creazione fornitura: ${errF.message}`);
         fornituraId = nuova.id;
 
         if (d.prezzo_materia_prima) {
           await supabase.from("tariffe").insert({
-            fornitura_id:         fornituraId,
-            tipo_prezzo:          d.tipo_prezzo ?? "FISSO",
+            fornitura_id: fornituraId, tipo_prezzo: d.tipo_prezzo ?? "FISSO",
             prezzo_materia_prima: d.prezzo_materia_prima,
-            data_inizio:          d.periodo_inizio ?? new Date().toISOString().slice(0,10),
-            data_fine:            d.data_scadenza_offerta,
+            data_inizio: d.periodo_inizio ?? new Date().toISOString().slice(0,10),
+            data_fine: d.data_scadenza_offerta,
           });
         }
       }
 
       const { error: errB } = await supabase.from("bollette").insert({
-        fornitura_id:      fornituraId,
-        data_emissione:    d.data_emissione,
-        periodo_inizio:    d.periodo_inizio,
-        periodo_fine:      d.periodo_fine,
-        consumo_fatturato: d.consumo_fatturato,
-        totale_pagare:     d.totale_pagare,
-        stato:             "pagata",
-        dati_estratti:     d,
+        fornitura_id: fornituraId, data_emissione: d.data_emissione, periodo_inizio: d.periodo_inizio,
+        periodo_fine: d.periodo_fine, consumo_fatturato: d.consumo_fatturato, totale_pagare: d.totale_pagare,
+        stato: "pagata", dati_estratti: d,
       });
       if (errB) throw new Error(`Errore salvataggio bolletta: ${errB.message}`);
 
@@ -292,13 +264,13 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               <div style={{ background:C.skyDim, borderRadius:12, padding:12 }}><Camera size={24} color={C.sky} /></div>
               <div style={{ textAlign:"center" }}>
                 <p style={{ color:C.text, fontSize:13, fontWeight:700, margin:"0 0 3px" }}>Foto / Screenshot</p>
-                <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.4 }}>Fotocamera o<br/>rullino foto</p>
+                <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.4 }}>Seleziona anche<br/>più foto insieme</p>
               </div>
             </button>
           </div>
           <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:16 }}>
             <p style={{ color:C.textMid, fontSize:12, fontWeight:600, margin:"0 0 10px" }}>💡 Come funziona</p>
-            {["Carica il PDF oppure una foto della bolletta","L'AI estrae automaticamente prezzi, consumi e POD/PDR","Controlla i dati e salvali con un tap"].map((t,i) => (
+            {["Carica il PDF oppure le foto della bolletta","L'AI estrae automaticamente prezzi, consumi e POD/PDR","Controlla i dati e salvali con un tap"].map((t,i) => (
               <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, marginBottom:i<2?10:0 }}>
                 <div style={{ background:C.amberDim, borderRadius:"50%", width:20, height:20, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
                   <span style={{ color:C.amber, fontSize:10, fontWeight:700 }}>{i+1}</span>
@@ -323,8 +295,6 @@ export default function UploadScreen({ user, onBollettaSaved }) {
 
       {fase === "review" && datiEstrat && (
         <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-          
-          {/* AVVISO POD MANCANTE */}
           {!hasPod && (
             <div style={{ background: C.amberDim, border: `1px solid ${C.amber}40`, borderRadius: 16, padding: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
@@ -332,8 +302,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                 <p style={{ color: C.amber, fontSize: 14, fontWeight: 700, margin: 0 }}>Codice POD/PDR mancante</p>
               </div>
               <p style={{ color: C.textMid, fontSize: 12, margin: 0, lineHeight: 1.5 }}>
-                L'AI ha estratto i dati correttamente, ma nell'immagine non è presente il codice identificativo dell'utenza (POD per la Luce, PDR per il Gas). 
-                Assicurati di caricare la pagina in cui è visibile questo codice.
+                L'AI ha estratto i dati correttamente, ma non è presente il codice identificativo dell'utenza. Assicurati di caricare la pagina in cui è visibile.
               </p>
             </div>
           )}
@@ -344,38 +313,22 @@ export default function UploadScreen({ user, onBollettaSaved }) {
               <p style={{ color:C.green, fontSize:13, fontWeight:700, margin:0 }}>Dati estratti</p>
             </div>
             <div style={{ marginBottom:14 }}>
-              <span style={{
-                background: datiEstrat.tipo_utenza === "LUCE" ? C.amberDim : C.skyDim,
-                color:      datiEstrat.tipo_utenza === "LUCE" ? C.amber    : C.sky,
-                fontSize:11, fontWeight:700, borderRadius:20, padding:"4px 12px",
-                letterSpacing:1, textTransform:"uppercase",
-              }}>
+              <span style={{ background: datiEstrat.tipo_utenza === "LUCE" ? C.amberDim : C.skyDim, color: datiEstrat.tipo_utenza === "LUCE" ? C.amber : C.sky, fontSize:11, fontWeight:700, borderRadius:20, padding:"4px 12px", letterSpacing:1, textTransform:"uppercase" }}>
                 {datiEstrat.tipo_utenza === "LUCE" ? "⚡ Luce" : "🔥 Gas"}
               </span>
             </div>
             {[
-              ["Intestatario",     datiEstrat.intestatario],
-              ["Fornitore",        datiEstrat.fornitore],
-              ["Offerta",          datiEstrat.nome_offerta],
+              ["Intestatario", datiEstrat.intestatario], ["Fornitore", datiEstrat.fornitore], ["Offerta", datiEstrat.nome_offerta],
               [datiEstrat.tipo_utenza === "LUCE" ? "POD" : "PDR", datiEstrat.pod_pdr || "Mancante ❌"],
-              ["Periodo",          datiEstrat.periodo_inizio && datiEstrat.periodo_fine
-                                   ? `${fmt(datiEstrat.periodo_inizio)} → ${fmt(datiEstrat.periodo_fine)}` : null],
-              ["Consumo",          datiEstrat.consumo_fatturato != null
-                                   ? `${datiEstrat.consumo_fatturato} ${datiEstrat.unita_misura ?? ""}` : null],
-              ["Tariffa",          datiEstrat.prezzo_materia_prima != null
-                                   ? `${datiEstrat.prezzo_materia_prima} €/${datiEstrat.unita_misura ?? "kWh"}` : null],
-              ["Totale",           datiEstrat.totale_pagare != null ? `${datiEstrat.totale_pagare} €` : null],
+              ["Periodo", datiEstrat.periodo_inizio && datiEstrat.periodo_fine ? `${fmt(datiEstrat.periodo_inizio)} → ${fmt(datiEstrat.periodo_fine)}` : null],
+              ["Consumo", datiEstrat.consumo_fatturato != null ? `${datiEstrat.consumo_fatturato} ${datiEstrat.unita_misura ?? ""}` : null],
+              ["Tariffa", datiEstrat.prezzo_materia_prima != null ? `${datiEstrat.prezzo_materia_prima} €/${datiEstrat.unita_misura ?? "kWh"}` : null],
+              ["Totale", datiEstrat.totale_pagare != null ? `${datiEstrat.totale_pagare} €` : null],
               ["Scadenza offerta", datiEstrat.data_scadenza_offerta ? fmt(datiEstrat.data_scadenza_offerta) : null],
             ].filter(([,v]) => v != null).map(([k,v]) => (
               <div key={k} style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, gap:12 }}>
                 <span style={{ color:C.textDim, fontSize:12, flexShrink:0 }}>{k}</span>
-                <span style={{ 
-                  color: v === "Mancante ❌" ? C.amber : C.text, 
-                  fontSize:12, 
-                  fontWeight: v === "Mancante ❌" ? 700 : 600, 
-                  textAlign:"right",
-                  fontFamily: k==="POD"||k==="PDR" ? "monospace":"inherit" 
-                }}>{v}</span>
+                <span style={{ color: v === "Mancante ❌" ? C.amber : C.text, fontSize:12, fontWeight: v === "Mancante ❌" ? 700 : 600, textAlign:"right", fontFamily: k==="POD"||k==="PDR" ? "monospace":"inherit" }}>{v}</span>
               </div>
             ))}
             {(() => {
@@ -384,11 +337,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                 <div style={{ borderTop:`1px solid #1e1e1e`, paddingTop:10, marginTop:4 }}>
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                     <span style={{ color:C.textDim, fontSize:12 }}>Storico mensile</span>
-                    <span style={{
-                      background: storico.length > 0 ? C.greenDim : "#2a1500",
-                      color:      storico.length > 0 ? C.green    : "#f97316",
-                      fontSize:10, fontWeight:700, borderRadius:20, padding:"2px 8px"
-                    }}>
+                    <span style={{ background: storico.length > 0 ? C.greenDim : "#2a1500", color: storico.length > 0 ? C.green : "#f97316", fontSize:10, fontWeight:700, borderRadius:20, padding:"2px 8px" }}>
                       {storico.length > 0 ? `${storico.length} mesi estratti` : "Non trovato"}
                     </span>
                   </div>
@@ -403,37 +352,20 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                       {storico.length > 6 && <span style={{ color:C.textDim, fontSize:10, alignSelf:"center" }}>+{storico.length-6} altri</span>}
                     </div>
                   )}
-                  {storico.length === 0 && (
-                    <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.5 }}>
-                      Il grafico mostrerà solo il periodo di questa bolletta. Carica più bollette per espandere lo storico.
-                    </p>
-                  )}
+                  {storico.length === 0 && <p style={{ color:C.textDim, fontSize:11, margin:0, lineHeight:1.5 }}>Il grafico mostrerà solo il periodo di questa bolletta.</p>}
                 </div>
               );
             })()}
           </div>
           
-          <button 
-            disabled={!hasPod}
-            onClick={hasPod ? salva : undefined} 
-            style={{ 
-              width:"100%", padding:"16px", borderRadius:18, 
-              background: hasPod ? C.green : C.surface2, 
-              border: hasPod ? "none" : `1px solid ${C.border}`,
-              cursor: hasPod ? "pointer" : "not-allowed", 
-              display:"flex", alignItems:"center", justifyContent:"center", gap:10,
-              opacity: hasPod ? 1 : 0.6
-            }}
-          >
+          <button disabled={!hasPod} onClick={hasPod ? salva : undefined} style={{ width:"100%", padding:"16px", borderRadius:18, background: hasPod ? C.green : C.surface2, border: hasPod ? "none" : `1px solid ${C.border}`, cursor: hasPod ? "pointer" : "not-allowed", display:"flex", alignItems:"center", justifyContent:"center", gap:10, opacity: hasPod ? 1 : 0.6 }}>
             <Save size={18} color={hasPod ? "#fff" : C.textDim} />
-            <span style={{ color: hasPod ? "#fff" : C.textDim, fontSize:15, fontWeight:700 }}>
-              {hasPod ? "Salva bolletta" : "Impossibile salvare"}
-            </span>
+            <span style={{ color: hasPod ? "#fff" : C.textDim, fontSize:15, fontWeight:700 }}>{hasPod ? "Salva bolletta" : "Impossibile salvare"}</span>
           </button>
           
           <button onClick={reset} style={{ width:"100%", padding:"14px", borderRadius:18, background:C.surface, border:`1px solid ${C.border}`, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
             <RotateCcw size={16} color={C.textDim} />
-            <span style={{ color:C.textDim, fontSize:14 }}>{hasPod ? "Carica un'altra bolletta" : "Riprova con un'altra foto"}</span>
+            <span style={{ color:C.textDim, fontSize:14 }}>Riprova</span>
           </button>
         </div>
       )}
@@ -477,18 +409,10 @@ export default function UploadScreen({ user, onBollettaSaved }) {
         </div>
       )}
 
-      <input ref={fileRef} type="file" accept=".pdf,application/pdf" style={{ display:"none" }}
-        onChange={e => e.target.files[0] && parseFile(e.target.files[0])} />
-      <input ref={imgRef} type="file" accept="image/*" style={{ display:"none" }}
-        onChange={e => e.target.files[0] && parseFile(e.target.files[0])} />
+      <input ref={fileRef} type="file" accept=".pdf,application/pdf" style={{ display:"none" }} onChange={e => parseFiles(Array.from(e.target.files))} />
+      <input ref={imgRef} type="file" accept="image/*" multiple style={{ display:"none" }} onChange={e => parseFiles(Array.from(e.target.files))} />
 
       <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
     </div>
   );
-}
-
-function fmt(iso) {
-  if (!iso) return "";
-  try { return new Date(iso).toLocaleDateString("it-IT", { month:"short", year:"numeric" }); }
-  catch { return iso; }
 }
