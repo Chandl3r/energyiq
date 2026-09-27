@@ -21,7 +21,8 @@ function extractPrezzoFromText(raw) {
   const patterns = [
     /Prezzo\s+Fisso\s*(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*€\s*\/\s*(?:kWh|Smc)/i,
     /Prezzo\s+Energia\s*(?:Fisso\s*)?(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*€\s*\/\s*(?:kWh|Smc)/i,
-    /Corrispettivo\s+per\s+il\s+consumo(?:[\s\S]{0,100}?)(0[,.][\d]{4,6})/i,
+    // Ignora la formula "+ CDISPD" e prende il valore reale della tariffa
+    /Corrispettivo\s+per\s+il\s+consumo(?!\s*\+)(?:[\s\S]{0,80}?)(0[,.][\d]{4,6})/i,
     /=\s*(0[,.][\d]{4,6})\s*€\s*\/\s*kWh/,
     /=\s*(0[,.][\d]{4,6})\s*€\s*\/\s*Smc/,
   ];

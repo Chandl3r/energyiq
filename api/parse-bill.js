@@ -41,8 +41,8 @@ function extractPrezzoRegex(testo) {
   const patterns = [
     /Prezzo\s+Fisso\s*(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*[€euro]*\s*\/\s*(?:kWh|Smc)/i,
     /Prezzo\s+Energia\s*(?:Fisso\s*)?(?:\([^)]*\))?\s*=\s*([\d]+[,.][\d]+)\s*[€euro]*\s*\/\s*(?:kWh|Smc)/i,
-    // Correzione per Acea: evita la riga "+ CDISPD" e cerca direttamente il blocco con €/kWh
-    /Corrispettivo\s+per\s+il\s+consumo\s+(?:[A-Za-z]{3}\d{2}\s+)?€\/kWh\s+(0[,.][\d]{4,6})/i,
+    // Ignora la formula "+ CDISPD" e prende il valore reale della tariffa
+    /Corrispettivo\s+per\s+il\s+consumo(?!\s*\+)(?:[\s\S]{0,80}?)(0[,.][\d]{4,6})/i,
     /=\s*(0[,.][\d]{4,6})\s*[€]\s*\/\s*kWh/,
     /=\s*(0[,.][\d]{4,6})\s*[€]\s*\/\s*Smc/,
   ];
