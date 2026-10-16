@@ -36,7 +36,7 @@ export async function signInWithGoogle() {
       await Browser.open({
         url:        data.url,
         windowName: '_self',         // stesso tab, non nuovo
-        presentationStyle: 'popover',
+        presentationStyle: 'fullscreen', // Modificato da popover a fullscreen
       });
     }
   } else {
@@ -65,7 +65,7 @@ export async function signInWithApple() {
       await Browser.open({
         url:        data.url,
         windowName: '_self',
-        presentationStyle: 'popover',
+        presentationStyle: 'fullscreen', // Modificato da popover a fullscreen
       });
     }
   } else {
