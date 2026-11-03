@@ -3,6 +3,9 @@ import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase'
 import Auth from './components/Auth'
 import AppShell from './AppShell'
+import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
+import { AdMob } from '@capacitor-community/admob';
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -10,6 +13,7 @@ export default function App() {
   const [dati,    setDati]    = useState(null)
 
   useEffect(() => {
+    // 1. Gestione Autenticazione
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setLoading(false)
@@ -18,7 +22,44 @@ export default function App() {
       setSession(session)
       if (!session) setDati(null)
     })
-    return () => subscription.unsubscribe()
+
+    // 2. Gestione Annunci AdMob (Solo nativo)
+    let appStateListener;
+    if (Capacitor.isNativePlatform()) {
+      const initAds = async () => {
+        try {
+          await AdMob.initialize();
+          
+          // ID REALI DELLE UNITA' PUBBLICITARIE "APERTURA APP"
+          const adId = Capacitor.getPlatform() === 'ios'
+            ? 'ca-app-pub-4271016850546399/2868326513' // Sostituisci con il vero ID Unità per iOS (ca-app-pub-...)
+            : 'ca-app-pub-4271016850546399/3306264037'; // Tuo ID reale Android recuperato dallo screenshot
+
+          // Precarica il primo annuncio in background (isTesting: false per usare gli annunci reali)
+          await AdMob.prepareAppOpenAd({ adUnitId: adId, isTesting: false });
+
+          // Listener: mostra l'annuncio quando l'app torna in primo piano
+          appStateListener = await CapApp.addListener('appStateChange', async (state) => {
+            if (state.isActive) {
+              await AdMob.showAppOpenAd().catch(() => {});
+              // Precarica subito il prossimo annuncio in background per la volta successiva
+              await AdMob.prepareAppOpenAd({ adUnitId: adId, isTesting: false }).catch(() => {});
+            }
+          });
+        } catch (err) {
+          console.error('Errore inizializzazione AdMob:', err);
+        }
+      };
+      initAds();
+    }
+
+    return () => {
+      subscription.unsubscribe();
+      // Rimuovi SOLO il listener di AdMob, salvaguardando quello del login
+      if (appStateListener) {
+        appStateListener.remove();
+      }
+    };
   }, [])
 
   useEffect(() => {
