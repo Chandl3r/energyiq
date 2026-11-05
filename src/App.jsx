@@ -5,7 +5,6 @@ import Auth from './components/Auth'
 import AppShell from './AppShell'
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
-import { AdMob } from '@capacitor-community/admob';
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -28,25 +27,28 @@ export default function App() {
     if (Capacitor.isNativePlatform()) {
       const initAds = async () => {
         try {
+          // IMPORTAZIONE DINAMICA: carica AdMob solo se non ci sono errori critici
+          const { AdMob } = await import('@capacitor-community/admob');
+          
           await AdMob.initialize();
           
           // ID REALI DELLE UNITA' PUBBLICITARIE "APERTURA APP"
           const adId = Capacitor.getPlatform() === 'ios'
-            ? 'ca-app-pub-4271016850546399/2868326513' // Sostituisci con il vero ID Unità per iOS (ca-app-pub-...)
-            : 'ca-app-pub-4271016850546399/3306264037'; // Tuo ID reale Android recuperato dallo screenshot
+            ? 'ca-app-pub-4271016850546399/2868326513'
+            : 'ca-app-pub-4271016850546399/3306264037';
 
-          // Precarica il primo annuncio in background (isTesting: false per usare gli annunci reali)
+          // Precarica il primo annuncio in background
           await AdMob.prepareAppOpenAd({ adUnitId: adId, isTesting: false });
 
           // Listener: mostra l'annuncio quando l'app torna in primo piano
           appStateListener = await CapApp.addListener('appStateChange', async (state) => {
             if (state.isActive) {
               await AdMob.showAppOpenAd().catch(() => {});
-              // Precarica subito il prossimo annuncio in background per la volta successiva
               await AdMob.prepareAppOpenAd({ adUnitId: adId, isTesting: false }).catch(() => {});
             }
           });
         } catch (err) {
+          // Ora, se l'importazione o l'avvio falliscono, React non morirà
           console.error('Errore inizializzazione AdMob:', err);
         }
       };
