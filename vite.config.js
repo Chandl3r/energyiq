@@ -4,5 +4,8 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-base: './', // <-- FONDAMENTALE PER ANDROID CAPACITOR
+  base: './', // <-- FONDAMENTALE PER ANDROID CAPACITOR
+  build: {
+    target: 'es2020' // <-- COMPATIBILITÀ WEBVIEW ANDROID (RISOLVE LA SCHERMATA BIANCA)
+  }
 })
