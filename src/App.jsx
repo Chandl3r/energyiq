@@ -84,7 +84,7 @@ function MainApp() {
           setDebugMsg(d => d + '\nERRORE ADMOB: ' + err.message);
         }
       };
-      initAds();
+      //initAds();
     }
 
     return () => {
