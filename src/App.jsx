@@ -5,83 +5,49 @@ import Auth from './components/Auth'
 import AppShell from './AppShell'
 import { Capacitor } from '@capacitor/core'
 import { App as CapApp } from '@capacitor/app'
-// Rimosso import statico di AdMob per sicurezza
 
-// --- 1. SCUDO GLOBALE PER GLI ERRORI A SCHERMO ---
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null, errorInfo: null };
-  }
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error, errorInfo) {
-    this.setState({ errorInfo });
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ padding: '20px', backgroundColor: '#111', color: '#ff4444', minHeight: '100vh', wordWrap: 'break-word', fontFamily: 'monospace' }}>
-          <h2>🚨 CRASH JAVASCRIPT</h2>
-          <p><strong>Errore:</strong> {this.state.error && this.state.error.toString()}</p>
-          <details style={{ whiteSpace: 'pre-wrap', marginTop: '10px' }}>
-            <summary style={{color: '#fff'}}>Mostra Dettagli</summary>
-            {this.state.errorInfo && this.state.errorInfo.componentStack}
-          </details>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-// --- 2. LOGICA DELL'APP ---
 function MainApp() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const [dati, setDati] = useState(null)
-  const [debugMsg, setDebugMsg] = useState('Avvio in corso...') // Logger a schermo
 
   useEffect(() => {
     // Autenticazione
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setLoading(false)
-      setDebugMsg(d => d + '\nSessione caricata.')
-    }).catch(err => setDebugMsg(d => d + '\nErr DB: ' + err.message));
+    }).catch(() => {});
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
       if (!session) setDati(null)
     })
 
-    // AdMob asincrono
+    // AdMob asincrono - Utilizzo App Open Ad con comandi aggiornati
     let appStateListener;
     if (Capacitor.isNativePlatform()) {
       const initAds = async () => {
         try {
-          setDebugMsg(d => d + '\nImportazione AdMob...');
           const { AdMob } = await import('@capacitor-community/admob');
-          
-          setDebugMsg(d => d + '\nInizializzazione...');
           await AdMob.initialize();
           
+          // ID REALI DELLE UNITA' PUBBLICITARIE "APERTURA APP"
           const adId = Capacitor.getPlatform() === 'ios'
             ? 'ca-app-pub-4271016850546399/2868326513'
             : 'ca-app-pub-4271016850546399/3306264037';
 
-          await AdMob.prepareAppOpenAd({ adUnitId: adId, isTesting: false });
-          setDebugMsg(d => d + '\nAnnuncio pronto.');
+          // NUOVO COMANDO: carica l'annuncio
+          await AdMob.loadAppOpen({ adUnitId: adId, isTesting: false });
 
           appStateListener = await CapApp.addListener('appStateChange', async (state) => {
             if (state.isActive) {
-              await AdMob.showAppOpenAd().catch(() => {});
-              await AdMob.prepareAppOpenAd({ adUnitId: adId, isTesting: false }).catch(() => {});
+              // NUOVO COMANDO: mostra l'annuncio
+              await AdMob.showAppOpen().catch(() => {});
+              await AdMob.loadAppOpen({ adUnitId: adId, isTesting: false }).catch(() => {});
             }
           });
         } catch (err) {
-          setDebugMsg(d => d + '\nERRORE ADMOB: ' + err.message);
+          console.error("AdMob Init Error:", err);
         }
       };
       initAds();
@@ -95,7 +61,7 @@ function MainApp() {
 
   useEffect(() => {
     if (!session?.user) return
-    loadDati(session.user.id).catch(err => setDebugMsg(d => d + '\nErr Fetch: ' + err.message))
+    loadDati(session.user.id).catch(() => {})
   }, [session])
 
   const loadDati = async (userId) => {
@@ -114,25 +80,17 @@ function MainApp() {
   if (loading) return (
     <div style={{position:'relative', width:'100%', height:'100vh', background:'#080808'}}>
       <Splash />
-      <div style={{position:'absolute', bottom:10, left:10, color:'lime', fontSize:12, whiteSpace:'pre-wrap'}}>{debugMsg}</div>
     </div>
   )
   if (!session) return <Auth />
 
   return (
-    <>
-      {/* Mostra eventuali errori non bloccanti in verde durante l'uso dell'app */}
-      <div style={{position:'fixed', top:40, left:10, zIndex:9999, color:'lime', fontSize:12, pointerEvents:'none', whiteSpace:'pre-wrap', textShadow:'1px 1px 0 #000'}}>
-        {debugMsg.includes('ERRORE') ? debugMsg : ''}
-      </div>
-      
-      <AppShell
-        user={session.user}
-        dati={dati}
-        onSignOut={handleSignOut}
-        onRefresh={() => loadDati(session.user.id)}
-      />
-    </>
+    <AppShell
+      user={session.user}
+      dati={dati}
+      onSignOut={handleSignOut}
+      onRefresh={() => loadDati(session.user.id)}
+    />
   )
 }
 
@@ -144,11 +102,6 @@ function Splash() {
   )
 }
 
-// --- 3. ESPORTAZIONE SICURA ---
 export default function App() {
-  return (
-    <ErrorBoundary>
-      <MainApp />
-    </ErrorBoundary>
-  )
+  return <MainApp />
 }
