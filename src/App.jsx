@@ -23,7 +23,7 @@ function MainApp() {
       if (!session) setDati(null)
     })
 
-    // AdMob asincrono - Utilizzo App Open Ad con comandi aggiornati
+    // AdMob asincrono - Utilizzo App Open Ad con cold start e warm start
     let appStateListener;
     if (Capacitor.isNativePlatform()) {
       const initAds = async () => {
@@ -31,19 +31,22 @@ function MainApp() {
           const { AdMob } = await import('@capacitor-community/admob');
           await AdMob.initialize();
           
-          // ID REALI DELLE UNITA' PUBBLICITARIE "APERTURA APP"
           const adId = Capacitor.getPlatform() === 'ios'
             ? 'ca-app-pub-4271016850546399/2868326513'
             : 'ca-app-pub-4271016850546399/3306264037';
 
-          // NUOVO COMANDO: carica l'annuncio
-          await AdMob.loadAppOpen({ adUnitId: adId, isTesting: false });
+          // 1. CARICAMENTO E VISUALIZZAZIONE AL PRIMO AVVIO (Cold Start)
+          await AdMob.loadAppOpen({ adUnitId: adId, isTesting: true });
+          await AdMob.showAppOpen().catch(() => {});
+          
+          // 2. PRECARICAMENTO PER LA PROSSIMA RIAPERTURA
+          await AdMob.loadAppOpen({ adUnitId: adId, isTesting: true }).catch(() => {});
 
+          // 3. LISTENER PER LE RIAPERTURE DAL BACKGROUND (Warm Start)
           appStateListener = await CapApp.addListener('appStateChange', async (state) => {
             if (state.isActive) {
-              // NUOVO COMANDO: mostra l'annuncio
               await AdMob.showAppOpen().catch(() => {});
-              await AdMob.loadAppOpen({ adUnitId: adId, isTesting: false }).catch(() => {});
+              await AdMob.loadAppOpen({ adUnitId: adId, isTesting: true }).catch(() => {});
             }
           });
         } catch (err) {
