@@ -10,47 +10,55 @@ function MainApp() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const [dati, setDati] = useState(null)
+  const [debugMsg, setDebugMsg] = useState('Avvio in corso...') // Logger a schermo riattivato
 
   useEffect(() => {
     // Autenticazione
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setLoading(false)
-    }).catch(() => {});
+      setDebugMsg(d => d + '\nSessione caricata.')
+    }).catch(err => setDebugMsg(d => d + '\nErr DB: ' + err.message));
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
       if (!session) setDati(null)
     })
 
-    // AdMob asincrono - Utilizzo App Open Ad con cold start e warm start
+    // AdMob asincrono con log visivi
     let appStateListener;
     if (Capacitor.isNativePlatform()) {
       const initAds = async () => {
         try {
+          setDebugMsg(d => d + '\nImportazione AdMob...');
           const { AdMob } = await import('@capacitor-community/admob');
+          
+          setDebugMsg(d => d + '\nInizializzazione...');
           await AdMob.initialize();
           
           const adId = Capacitor.getPlatform() === 'ios'
             ? 'ca-app-pub-4271016850546399/2868326513'
             : 'ca-app-pub-4271016850546399/3306264037';
 
-          // 1. CARICAMENTO E VISUALIZZAZIONE AL PRIMO AVVIO (Cold Start)
+          setDebugMsg(d => d + '\nCaricamento annuncio...');
+          // Modalità test forzata per aggirare i blocchi di Google
           await AdMob.loadAppOpen({ adUnitId: adId, isTesting: true });
-          await AdMob.showAppOpen().catch(() => {});
           
-          // 2. PRECARICAMENTO PER LA PROSSIMA RIAPERTURA
+          setDebugMsg(d => d + '\nMostro annuncio (Cold Start)...');
+          await AdMob.showAppOpen().catch(err => setDebugMsg(d => d + '\nErr Show Cold: ' + err.message));
+          
+          // Precaricamento per la riapertura
           await AdMob.loadAppOpen({ adUnitId: adId, isTesting: true }).catch(() => {});
 
-          // 3. LISTENER PER LE RIAPERTURE DAL BACKGROUND (Warm Start)
           appStateListener = await CapApp.addListener('appStateChange', async (state) => {
             if (state.isActive) {
-              await AdMob.showAppOpen().catch(() => {});
+              setDebugMsg(d => d + '\nMostro annuncio (Warm Start)...');
+              await AdMob.showAppOpen().catch(err => setDebugMsg(d => d + '\nErr Show Warm: ' + err.message));
               await AdMob.loadAppOpen({ adUnitId: adId, isTesting: true }).catch(() => {});
             }
           });
         } catch (err) {
-          console.error("AdMob Init Error:", err);
+          setDebugMsg(d => d + '\nERRORE ADMOB: ' + err.message);
         }
       };
       initAds();
@@ -64,7 +72,7 @@ function MainApp() {
 
   useEffect(() => {
     if (!session?.user) return
-    loadDati(session.user.id).catch(() => {})
+    loadDati(session.user.id).catch(err => setDebugMsg(d => d + '\nErr Fetch: ' + err.message))
   }, [session])
 
   const loadDati = async (userId) => {
@@ -83,17 +91,23 @@ function MainApp() {
   if (loading) return (
     <div style={{position:'relative', width:'100%', height:'100vh', background:'#080808'}}>
       <Splash />
+      <div style={{position:'absolute', bottom:10, left:10, color:'lime', fontSize:12, whiteSpace:'pre-wrap'}}>{debugMsg}</div>
     </div>
   )
   if (!session) return <Auth />
 
   return (
-    <AppShell
-      user={session.user}
-      dati={dati}
-      onSignOut={handleSignOut}
-      onRefresh={() => loadDati(session.user.id)}
-    />
+    <>
+      <div style={{position:'fixed', top:40, left:10, zIndex:9999, color:'lime', fontSize:12, pointerEvents:'none', whiteSpace:'pre-wrap', textShadow:'1px 1px 0 #000'}}>
+        {debugMsg}
+      </div>
+      <AppShell
+        user={session.user}
+        dati={dati}
+        onSignOut={handleSignOut}
+        onRefresh={() => loadDati(session.user.id)}
+      />
+    </>
   )
 }
 
