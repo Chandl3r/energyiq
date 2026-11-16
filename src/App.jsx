@@ -6,6 +6,10 @@ import AppShell from './AppShell'
 import { Capacitor } from '@capacitor/core'
 import { App as CapApp } from '@capacitor/app'
 
+// Overlay di debug in verde. TEMPORANEAMENTE `true` per la build Android 23 (verifica logica AdMob).
+// Prima della build iOS / della release definitiva rimettere: const SHOW_DEBUG = import.meta.env.DEV
+const SHOW_DEBUG = true
+
 function MainApp() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -40,23 +44,74 @@ function MainApp() {
             ? 'ca-app-pub-4271016850546399/2868326513'
             : 'ca-app-pub-4271016850546399/3306264037';
 
-          setDebugMsg(d => d + '\nCaricamento annuncio...');
           // Plugin v8.3.0: la chiave è adId (non adUnitId); isTesting è ignorato da App Open
-          await AdMob.loadAppOpen({ adId: adId });
-          
-          setDebugMsg(d => d + '\nMostro annuncio (Cold Start)...');
-          await AdMob.showAppOpen().catch(err => setDebugMsg(d => d + '\nErr Show Cold: ' + err.message));
-          
-          // Precaricamento per la riapertura
-          await AdMob.loadAppOpen({ adId: adId }).catch(() => {});
+          const log = (m) => setDebugMsg(d => d + '\n' + m);
+          const MIN_BACKGROUND_MS = 30 * 1000;   // al rientro: app in background da almeno 30 s
+          const MIN_GAP_MS = 4 * 60 * 1000;      // almeno 4 min tra un annuncio e l'altro
+          let isShowing = false;                 // un solo annuncio alla volta
+          let lastAdAt = 0;                      // chiusura dell'ultimo annuncio
+          let backgroundAt = null;               // quando l'utente ha lasciato l'app (non conta l'annuncio stesso)
+          let pendingCold = false;               // annuncio d'avvio rimandato al primo "app attiva"
 
-          appStateListener = await CapApp.addListener('appStateChange', async (state) => {
-            if (state.isActive) {
-              setDebugMsg(d => d + '\nMostro annuncio (Warm Start)...');
-              await AdMob.showAppOpen().catch(err => setDebugMsg(d => d + '\nErr Show Warm: ' + err.message));
-              await AdMob.loadAppOpen({ adId: adId }).catch(() => {});
+          const isLoaded = () => AdMob.isAppOpenLoaded().then(r => !!r?.value).catch(() => false);
+          let loading = null;                    // evita due caricamenti in parallelo
+          const load = () => loading ??= AdMob.loadAppOpen({ adId }).then(() => true)
+            .catch(err => { log('Err Load: ' + err.message); return false; })
+            .finally(() => { loading = null; });
+
+          // Mostra l'annuncio; resolve alla chiusura. Restituisce true se è stato mostrato.
+          const show = async (label) => {
+            if (isShowing) return false;
+            isShowing = true;
+            log('Mostro annuncio (' + label + ')...');
+            try {
+              await AdMob.showAppOpen();
+              lastAdAt = Date.now();
+              return true;
+            } catch (err) {
+              log('Err Show ' + label + ': ' + err.message);
+              return false;
+            } finally {
+              isShowing = false;
+              backgroundAt = null;
+              load(); // precarica il prossimo
             }
+          };
+
+          // Listener registrato prima dell'annuncio d'avvio, così non si perdono eventi
+          appStateListener = await CapApp.addListener('appStateChange', async (state) => {
+            if (!state.isActive) {
+              // L'annuncio a schermo intero manda l'app in pausa: non è un vero "uscire dall'app"
+              if (!isShowing) backgroundAt = Date.now();
+              return;
+            }
+            if (isShowing) return;
+            if (pendingCold) {
+              pendingCold = false;
+              if (await isLoaded() || await load()) await show('Cold Start ritardato');
+              return;
+            }
+            const now = Date.now();
+            const wasAway = backgroundAt !== null && now - backgroundAt >= MIN_BACKGROUND_MS;
+            backgroundAt = null;
+            if (!wasAway || now - lastAdAt < MIN_GAP_MS) return; // rientro breve o annuncio troppo recente
+            if (await isLoaded()) await show('Warm Start');
+            else load(); // non pronto: niente annuncio in ritardo, lo prepariamo per la prossima volta
           });
+
+          log('Caricamento annuncio...');
+          if (await load()) {
+            const { isActive } = await CapApp.getState().catch(() => ({ isActive: true }));
+            let shown = false;
+            if (isActive) shown = await show('Cold Start');
+            if (!shown) {
+              // Android a volte non considera ancora l'app in primo piano: riprova una volta
+              await new Promise(r => setTimeout(r, 1500));
+              const { isActive: activeNow } = await CapApp.getState().catch(() => ({ isActive: false }));
+              if (activeNow && (await isLoaded() || await load())) shown = await show('Cold Start retry');
+              if (!shown && lastAdAt === 0) pendingCold = true;
+            }
+          }
         } catch (err) {
           setDebugMsg(d => d + '\nERRORE ADMOB: ' + err.message);
         }
@@ -91,16 +146,18 @@ function MainApp() {
   if (loading) return (
     <div style={{position:'relative', width:'100%', height:'100vh', background:'#080808'}}>
       <Splash />
-      <div style={{position:'absolute', bottom:10, left:10, color:'lime', fontSize:12, whiteSpace:'pre-wrap'}}>{debugMsg}</div>
+      {SHOW_DEBUG && <div style={{position:'absolute', bottom:10, left:10, color:'lime', fontSize:12, whiteSpace:'pre-wrap'}}>{debugMsg}</div>}
     </div>
   )
   if (!session) return <Auth />
 
   return (
     <>
-      <div style={{position:'fixed', top:40, left:10, zIndex:9999, color:'lime', fontSize:12, pointerEvents:'none', whiteSpace:'pre-wrap', textShadow:'1px 1px 0 #000'}}>
-        {debugMsg}
-      </div>
+      {SHOW_DEBUG && (
+        <div style={{position:'fixed', top:40, left:10, zIndex:9999, color:'lime', fontSize:12, pointerEvents:'none', whiteSpace:'pre-wrap', textShadow:'1px 1px 0 #000'}}>
+          {debugMsg}
+        </div>
+      )}
       <AppShell
         user={session.user}
         dati={dati}
