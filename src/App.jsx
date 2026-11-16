@@ -6,9 +6,8 @@ import AppShell from './AppShell'
 import { Capacitor } from '@capacitor/core'
 import { App as CapApp } from '@capacitor/app'
 
-// Overlay di debug in verde. TEMPORANEAMENTE `true` per la build Android 23 (verifica logica AdMob).
-// Prima della build iOS / della release definitiva rimettere: const SHOW_DEBUG = import.meta.env.DEV
-const SHOW_DEBUG = true
+// Overlay di debug in verde: visibile solo in sviluppo (npm run dev). Per un test su device mettere temporaneamente `true`.
+const SHOW_DEBUG = import.meta.env.DEV
 
 function MainApp() {
   const [session, setSession] = useState(null)
