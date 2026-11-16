@@ -41,20 +41,20 @@ function MainApp() {
             : 'ca-app-pub-4271016850546399/3306264037';
 
           setDebugMsg(d => d + '\nCaricamento annuncio...');
-          // Modalità test forzata per aggirare i blocchi di Google
-          await AdMob.loadAppOpen({ adUnitId: adId, isTesting: true });
+          // Plugin v8.3.0: la chiave è adId (non adUnitId); isTesting è ignorato da App Open
+          await AdMob.loadAppOpen({ adId: adId });
           
           setDebugMsg(d => d + '\nMostro annuncio (Cold Start)...');
           await AdMob.showAppOpen().catch(err => setDebugMsg(d => d + '\nErr Show Cold: ' + err.message));
           
           // Precaricamento per la riapertura
-          await AdMob.loadAppOpen({ adUnitId: adId, isTesting: true }).catch(() => {});
+          await AdMob.loadAppOpen({ adId: adId }).catch(() => {});
 
           appStateListener = await CapApp.addListener('appStateChange', async (state) => {
             if (state.isActive) {
               setDebugMsg(d => d + '\nMostro annuncio (Warm Start)...');
               await AdMob.showAppOpen().catch(err => setDebugMsg(d => d + '\nErr Show Warm: ' + err.message));
-              await AdMob.loadAppOpen({ adUnitId: adId, isTesting: true }).catch(() => {});
+              await AdMob.loadAppOpen({ adId: adId }).catch(() => {});
             }
           });
         } catch (err) {
