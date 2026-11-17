@@ -6,6 +6,7 @@
 import { Capacitor } from '@capacitor/core';
 import { Browser }   from '@capacitor/browser';
 import { supabase }  from './supabase';
+import { suppressNextAd } from './ads';
 
 export const isNative = Capacitor.isNativePlatform();
 
@@ -33,6 +34,7 @@ export async function signInWithGoogle() {
 
     // 2. Apri nel browser di sistema (Safari/Chrome) — non nel webview
     if (data?.url) {
+      suppressNextAd(); // al rientro dal login niente annuncio
       await Browser.open({
         url:        data.url,
         windowName: '_self',         // stesso tab, non nuovo
@@ -62,6 +64,7 @@ export async function signInWithApple() {
     if (error) throw error;
 
     if (data?.url) {
+      suppressNextAd(); // al rientro dal login niente annuncio
       await Browser.open({
         url:        data.url,
         windowName: '_self',

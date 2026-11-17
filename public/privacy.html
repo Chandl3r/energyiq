@@ -61,15 +61,16 @@
 <body>
   <div class="container">
     <h1>Informativa sulla Privacy di EnergyIQ</h1>
-    <div class="update-date">Ultimo aggiornamento: 3 Agosto 2026</div>
+    <div class="update-date">Ultimo aggiornamento: 17 Novembre 2026</div>
     
     <p>La presente Informativa sulla Privacy descrive come <strong>EnergyIQ</strong> (sviluppata da Marco Vinci) raccoglie, utilizza e protegge i dati personali degli utenti all'interno dell'applicazione mobile e web.</p>
 
     <h2>1. Dati che raccogliamo</h2>
     <p>Per garantire il funzionamento dell'applicazione, raccogliamo esclusivamente i dati strettamente necessari:</p>
     <ul>
-      <li><strong>Dati di Autenticazione:</strong> Quando effettui l'accesso tramite Google OAuth, riceviamo il tuo indirizzo e-mail, il tuo nome e l'identificativo univoco del tuo account Google. Non abbiamo mai accesso alla tua password Google.</li>
-      <li><strong>Dati inseriti dall'utente:</strong> Informazioni relative alle tue forniture energetiche, bollette, offerte e consumi (es. codice POD/PDR, importi, periodi di fatturazione) che decidi liberamente di salvare all'interno dell'app.</li>
+      <li><strong>Dati di Autenticazione:</strong> Quando effettui l'accesso con Google o con Apple riceviamo il tuo indirizzo e-mail (con Apple può essere un indirizzo anonimo di inoltro), il tuo nome se lo condividi e un identificativo univoco del tuo account. Non abbiamo mai accesso alle tue password Google o Apple. In alternativa è possibile accedere con e-mail e password, gestite in forma cifrata da Supabase.</li>
+      <li><strong>Dati inseriti dall'utente:</strong> Informazioni relative alle tue forniture energetiche, bollette, offerte e consumi (es. codice POD/PDR, importi, periodi di fatturazione) che decidi liberamente di salvare all'interno dell'app, compresi i file di letture che scegli di importare dal Portale Consumi ARERA (consumi quartorari di luce e letture del gas).</li>
+      <li><strong>Dati per la pubblicità:</strong> L'app mostra un annuncio tramite Google AdMob. Per farlo, l'SDK di Google può raccogliere identificativi del dispositivo e dati tecnici e di interazione con l'annuncio (es. modello del dispositivo, indirizzo IP, impressioni e clic). Questi dati sono gestiti direttamente da Google e non contengono le tue bollette né i tuoi consumi.</li>
     </ul>
 
     <h2>2. Finalità del trattamento</h2>
@@ -77,28 +78,40 @@
     <ul>
       <li>Consentire l'autenticazione e l'accesso sicuro al tuo account personale.</li>
       <li>Memorizzare ed elaborare statistiche, grafici e indici relativi ai tuoi consumi energetici.</li>
-      <li>Fornire le funzionalità principali dell'applicazione.</li>
+      <li>Fornire le funzionalità principali dell'applicazione, compresa la lettura automatica delle bollette.</li>
+      <li>Mostrare un annuncio pubblicitario all'apertura dell'app, che consente di mantenere EnergyIQ gratuita.</li>
     </ul>
 
     <h2>3. Condivisione dei dati e Terze Parti</h2>
     <ul>
-      <li>I tuoi dati non vengono mai venduti, affittati o condivisi con terzi a fini di marketing o pubblicità.</li>
+      <li>I tuoi dati (bollette, forniture, consumi) non vengono mai venduti, affittati o condivisi con terzi a fini di marketing o pubblicità.</li>
       <li>Ci appoggiamo a infrastrutture cloud sicure e standard di settore per il funzionamento del servizio:
         <ul>
           <li><strong>Supabase:</strong> per la gestione sicura del database e dei token di autenticazione.</li>
           <li><strong>Google Cloud / Google Authentication:</strong> per consentire l'accesso rapido tramite account Google.</li>
+          <li><strong>Apple (Accedi con Apple):</strong> per consentire l'accesso tramite ID Apple.</li>
+          <li><strong>Vercel:</strong> per l'hosting dell'app web e del servizio di lettura delle bollette.</li>
+          <li><strong>Groq e Google Gemini:</strong> quando carichi una bolletta, il testo estratto dal PDF (oppure le foto della bolletta) viene inviato a servizi di intelligenza artificiale al solo scopo di riconoscerne i dati (fornitore, periodo, consumi, importi). Il trattamento avviene secondo le condizioni di questi fornitori.</li>
+          <li><strong>Google AdMob:</strong> per la pubblicità. Google tratta i dati descritti al punto 1 secondo la propria <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Informativa sulla privacy</a> (<a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener">come Google usa i dati delle app partner</a>).</li>
         </ul>
       </li>
     </ul>
 
-    <h2>4. Sicurezza dei dati</h2>
+    <h2>4. Pubblicità e consenso</h2>
+    <ul>
+      <li><strong>Utenti nell'Unione Europea, nel SEE, nel Regno Unito e in Svizzera:</strong> al primo avvio ti viene chiesto il consenso tramite il modulo di Google. Puoi scegliere tra annunci personalizzati e non personalizzati e cambiare la tua scelta in qualsiasi momento da <em>Profilo → Preferenze privacy annunci</em>.</li>
+      <li><strong>iOS:</strong> EnergyIQ non effettua tracciamento ai sensi di App Tracking Transparency e non accede all'identificativo pubblicitario (IDFA): su iPhone e iPad gli annunci non sono basati sul tracciamento tra app e siti di altre aziende.</li>
+      <li>La pubblicità consiste in un solo annuncio all'apertura dell'app: nessun banner durante l'uso.</li>
+    </ul>
+
+    <h2>5. Sicurezza dei dati</h2>
     <p>Tutti i dati trasmessi tra l'applicazione e i nostri server utilizzano protocolli di crittografia sicura (HTTPS/TLS). I dati conservati sul database Supabase sono soggetti a regole di sicurezza che impediscono l'accesso non autorizzato da parte di terzi o di altri utenti.</p>
 
-    <h2>5. Eliminazione del profilo e dei dati</h2>
-    <p>Hai il diritto di richiedere in qualsiasi momento la rimozione completa del tuo profilo e di tutti i dati sulle tue bollette e forniture.</p>
+    <h2>6. Eliminazione del profilo e dei dati</h2>
+    <p>Hai il diritto di richiedere in qualsiasi momento la rimozione completa del tuo profilo e di tutti i dati sulle tue bollette e forniture. Puoi farlo direttamente nell'app da <em>Profilo → Elimina account definitivamente</em>, oppure via e-mail.</p>
     <p>Puoi richiedere la cancellazione totale inviando un'e-mail a: <a href="mailto:marco.vinci84@gmail.com">marco.vinci84@gmail.com</a> con oggetto <em>"Richiesta cancellazione dati EnergyIQ"</em>. I dati verranno eliminati definitivamente dai nostri server entro 30 giorni.</p>
 
-    <h2>6. Contatti</h2>
+    <h2>7. Contatti</h2>
     <p>Per qualsiasi domanda o chiarimento relativa alla presente Informativa sulla Privacy, puoi contattare lo sviluppatore all'indirizzo e-mail: <a href="mailto:marco.vinci84@gmail.com">marco.vinci84@gmail.com</a>.</p>
   </div>
 </body>

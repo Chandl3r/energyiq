@@ -5,6 +5,7 @@ import Auth from './components/Auth'
 import AppShell from './AppShell'
 import { Capacitor } from '@capacitor/core'
 import { App as CapApp } from '@capacitor/app'
+import { consumeAdSuppression, setPrivacyOptionsRequired } from './lib/ads'
 
 // Overlay di debug in verde: visibile solo in sviluppo (npm run dev). Per un test su device mettere temporaneamente `true`.
 const SHOW_DEBUG = import.meta.env.DEV
@@ -36,9 +37,6 @@ function MainApp() {
           setDebugMsg(d => d + '\nImportazione AdMob...');
           const { AdMob } = await import('@capacitor-community/admob');
           
-          setDebugMsg(d => d + '\nInizializzazione...');
-          await AdMob.initialize();
-          
           const adId = Capacitor.getPlatform() === 'ios'
             ? 'ca-app-pub-4271016850546399/2868326513'
             : 'ca-app-pub-4271016850546399/3306264037';
@@ -47,10 +45,36 @@ function MainApp() {
           const log = (m) => setDebugMsg(d => d + '\n' + m);
           const MIN_BACKGROUND_MS = 30 * 1000;   // al rientro: app in background da almeno 30 s
           const MIN_GAP_MS = 4 * 60 * 1000;      // almeno 4 min tra un annuncio e l'altro
+          const FIRST_GAP_MS = 2 * 60 * 1000;    // prima volta (sessione del consenso): 2 min dal consenso
           let isShowing = false;                 // un solo annuncio alla volta
           let lastAdAt = 0;                      // chiusura dell'ultimo annuncio
           let backgroundAt = null;               // quando l'utente ha lasciato l'app (non conta l'annuncio stesso)
           let pendingCold = false;               // annuncio d'avvio rimandato al primo "app attiva"
+          let consentAt = null;                  // se il modulo GDPR è apparso in questa sessione: niente annuncio d'avvio
+
+          // Consenso GDPR (UMP di Google, messaggio configurato in AdMob → Privacy e messaggi).
+          // Appare solo quando serve (UE, prima volta): in quella sessione prende il posto dell'annuncio d'avvio.
+          // Niente App Tracking Transparency su iOS: l'app non traccia (nessuna chiamata a requestTrackingAuthorization).
+          let isConsenting = false;
+          try {
+            let info = await AdMob.requestConsentInfo();
+            if (info.status === 'REQUIRED' && info.isConsentFormAvailable) {
+              log('Mostro consenso GDPR...');
+              isConsenting = true;
+              info = await AdMob.showConsentForm();
+              consentAt = Date.now();
+            }
+            setPrivacyOptionsRequired(info.privacyOptionsRequirementStatus === 'REQUIRED');
+            log('Consenso: ' + info.status + (info.canRequestAds ? '' : ' (annunci non consentiti)'));
+            if (!info.canRequestAds) return;
+          } catch (err) {
+            log('Err Consenso: ' + err.message); // es. messaggio GDPR non configurato: si procede
+          } finally {
+            isConsenting = false;
+          }
+
+          log('Inizializzazione...');
+          await AdMob.initialize(); // dopo il consenso, come raccomanda Google
 
           const isLoaded = () => AdMob.isAppOpenLoaded().then(r => !!r?.value).catch(() => false);
           let loading = null;                    // evita due caricamenti in parallelo
@@ -81,25 +105,33 @@ function MainApp() {
           appStateListener = await CapApp.addListener('appStateChange', async (state) => {
             if (!state.isActive) {
               // L'annuncio a schermo intero manda l'app in pausa: non è un vero "uscire dall'app"
-              if (!isShowing) backgroundAt = Date.now();
+              if (!isShowing && !isConsenting) backgroundAt = Date.now();
               return;
             }
-            if (isShowing) return;
+            if (isShowing || isConsenting) return;
+            if (consumeAdSuppression()) { backgroundAt = null; return; } // rientro da selettore file o login
             if (pendingCold) {
               pendingCold = false;
               if (await isLoaded() || await load()) await show('Cold Start ritardato');
               return;
             }
             const now = Date.now();
-            const wasAway = backgroundAt !== null && now - backgroundAt >= MIN_BACKGROUND_MS;
+            // Prima volta (sessione del consenso, nessun annuncio ancora): basta un qualsiasi rientro,
+            // purché siano passati 2 min dal consenso. Poi regole normali: 30 s di background e 4 min tra annunci.
+            const firstTime = consentAt !== null && lastAdAt === 0;
+            const minBackground = firstTime ? 0 : MIN_BACKGROUND_MS;
+            const gapOk = firstTime ? now - consentAt >= FIRST_GAP_MS : now - lastAdAt >= MIN_GAP_MS;
+            const wasAway = backgroundAt !== null && now - backgroundAt >= minBackground;
             backgroundAt = null;
-            if (!wasAway || now - lastAdAt < MIN_GAP_MS) return; // rientro breve o annuncio troppo recente
+            if (!wasAway || !gapOk) return; // rientro breve o annuncio troppo recente
             if (await isLoaded()) await show('Warm Start');
             else load(); // non pronto: niente annuncio in ritardo, lo prepariamo per la prossima volta
           });
 
           log('Caricamento annuncio...');
-          if (await load()) {
+          if (consentAt !== null) {
+            load(); // sessione del consenso: niente annuncio d'avvio, lo prepariamo per il primo rientro
+          } else if (await load()) {
             const { isActive } = await CapApp.getState().catch(() => ({ isActive: true }));
             let shown = false;
             if (isActive) shown = await show('Cold Start');

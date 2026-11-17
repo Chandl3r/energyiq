@@ -10,6 +10,16 @@ import {
 } from "lucide-react";
 import { computeAndSaveAlerts } from "./lib/alerts";
 import { supabase } from "./lib/supabase";
+import { isPrivacyOptionsRequired, openPrivacyOptions, suppressNextAd } from "./lib/ads";
+import { Capacitor } from "@capacitor/core";
+
+const PRIVACY_URL = "https://energyiq-omega.vercel.app/privacy.html";
+async function apriInformativa() {
+  if (!Capacitor.isNativePlatform()) { window.open(PRIVACY_URL, "_blank"); return; }
+  suppressNextAd(); // al rientro dal browser niente annuncio
+  const { Browser } = await import("@capacitor/browser");
+  await Browser.open({ url: PRIVACY_URL });
+}
 
 const C = {
   bg:"#080808", surface:"#111111", surface2:"#181818",
@@ -940,6 +950,20 @@ function SettingsScreen({ user, dati, onSignOut, onRefresh }) {
         </div>
       )}
       
+      {/* PRIVACY: informativa + preferenze consenso annunci (GDPR, solo se richieste da Google) */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:"6px 18px" }}>
+        {[
+          ["Informativa sulla privacy", apriInformativa],
+          ...(isPrivacyOptionsRequired() ? [["Preferenze privacy annunci", () => openPrivacyOptions().catch(() => {})]] : []),
+        ].map(([label, onClick], i, arr) => (
+          <button key={label} onClick={onClick}
+            style={{ width:"100%", display:"flex", justifyContent:"space-between", alignItems:"center", background:"none", border:"none", borderBottom:i<arr.length-1?`1px solid ${C.border}`:"none", padding:"12px 0", cursor:"pointer" }}>
+            <span style={{ color:C.text, fontSize:14, fontWeight:600 }}>{label}</span>
+            <ChevronRight size={16} color={C.textDim} />
+          </button>
+        ))}
+      </div>
+
       {/* SEZIONE ACCOUNT DELETION */}
       <div style={{ display:"flex", flexDirection:"column", gap:10, marginTop:10 }}>
         <button onClick={onSignOut} style={{ background:C.surface, border:`1px solid #ef444440`, borderRadius:16, padding:16, cursor:"pointer", color:"#ef4444", fontSize:14, fontWeight:600, textAlign:"center" }}>

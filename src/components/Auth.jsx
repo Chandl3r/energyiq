@@ -1,6 +1,7 @@
 // src/components/Auth.jsx
 import { useState } from 'react';
 import { signInWithGoogle, signInWithApple, isNative } from '../lib/authNative';
+import { supabase } from '../lib/supabase';
 
 const C = {
   bg:      '#080808',
@@ -16,6 +17,11 @@ export default function Auth() {
   const [loadingGoogle, setLoadingGoogle] = useState(false);
   const [loadingApple,  setLoadingApple]  = useState(false);
   const [error,         setError]         = useState(null);
+  // Accesso con email/password: discreto, pensato per l'account demo della revisione Apple (Guideline 2.1)
+  const [showEmail,     setShowEmail]     = useState(false);
+  const [email,         setEmail]         = useState('');
+  const [password,      setPassword]      = useState('');
+  const [loadingEmail,  setLoadingEmail]  = useState(false);
 
   const handleSignInGoogle = async () => {
     try {
@@ -41,7 +47,26 @@ export default function Auth() {
     }
   };
 
-  const isAnyLoading = loadingGoogle || loadingApple;
+  const handleSignInEmail = async (e) => {
+    e.preventDefault();
+    try {
+      setLoadingEmail(true);
+      setError(null);
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) throw error;
+    } catch (err) {
+      setError(err.message === 'Invalid login credentials' ? 'Email o password non corretti' : (err.message ?? 'Errore durante il login'));
+    } finally {
+      setLoadingEmail(false);
+    }
+  };
+
+  const isAnyLoading = loadingGoogle || loadingApple || loadingEmail;
+  const inputStyle = {
+    width: '100%', boxSizing: 'border-box', padding: '14px 16px', background: C.surface,
+    border: `1px solid ${C.border}`, borderRadius: 14, color: C.text, fontSize: 15, outline: 'none',
+    fontFamily: "'DM Sans', sans-serif",
+  };
 
   return (
     <>
@@ -158,6 +183,26 @@ export default function Auth() {
             </span>
           </button>
 
+          {/* Accesso con email (link discreto) */}
+          {!showEmail ? (
+            <button onClick={() => { setShowEmail(true); setError(null); }} disabled={isAnyLoading}
+              style={{ background: 'none', border: 'none', color: C.textDim, fontSize: 13, cursor: 'pointer', padding: 8, marginTop: 4 }}>
+              Accedi con email
+            </button>
+          ) : (
+            <form onSubmit={handleSignInEmail} style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
+              <input type="email" autoComplete="username" inputMode="email" autoCapitalize="none" placeholder="Email"
+                value={email} onChange={e => setEmail(e.target.value)} required style={inputStyle} />
+              <input type="password" autoComplete="current-password" placeholder="Password"
+                value={password} onChange={e => setPassword(e.target.value)} required style={inputStyle} />
+              <button type="submit" disabled={isAnyLoading}
+                style={{ width: '100%', padding: '14px 20px', background: C.amber, border: 'none', borderRadius: 14,
+                  color: '#000', fontSize: 15, fontWeight: 700, cursor: isAnyLoading ? 'default' : 'pointer', opacity: isAnyLoading && !loadingEmail ? 0.6 : 1 }}>
+                {loadingEmail ? 'Accesso in corso…' : 'Accedi'}
+              </button>
+            </form>
+          )}
+
         </div>
 
         {error && (
@@ -168,7 +213,7 @@ export default function Auth() {
 
         <p style={{ color: C.textDim, fontSize: 11, marginTop: 32, textAlign: 'center', maxWidth: 280, lineHeight: 1.6 }}>
           Accedendo accetti i Termini di Servizio.<br />
-          I tuoi dati non vengono condivisi con terzi.
+          I tuoi dati non vengono mai venduti a terzi.
         </p>
       </div>
     </>

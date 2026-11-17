@@ -2,6 +2,7 @@
 import { useState, useRef } from "react";
 import { Camera, FileText, CheckCircle, AlertCircle, Loader2, Save, RotateCcw } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import { suppressNextAd } from "../lib/ads";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker?url";
 
@@ -255,7 +256,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
       {fase === "idle" && (
         <>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-            <button onClick={() => fileRef.current?.click()}
+            <button onClick={() => { suppressNextAd(); fileRef.current?.click(); }}
               style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:18, padding:"20px 16px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
               <div style={{ background:C.amberDim, borderRadius:12, padding:12 }}><FileText size={24} color={C.amber} /></div>
               <div style={{ textAlign:"center" }}>
@@ -263,7 +264,7 @@ export default function UploadScreen({ user, onBollettaSaved }) {
                 <p style={{ color:C.textDim, fontSize:11, margin:0 }}>Dal tuo dispositivo</p>
               </div>
             </button>
-            <button onClick={() => imgRef.current?.click()}
+            <button onClick={() => { suppressNextAd(); imgRef.current?.click(); }}
               style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:18, padding:"20px 16px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
               <div style={{ background:C.skyDim, borderRadius:12, padding:12 }}><Camera size={24} color={C.sky} /></div>
               <div style={{ textAlign:"center" }}>

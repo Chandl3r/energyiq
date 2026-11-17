@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "../lib/supabase";
 import { computeAndSaveAlerts } from "../lib/alerts";
+import { suppressNextAd } from "../lib/ads";
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, ResponsiveContainer, Tooltip, Cell,
@@ -508,7 +509,7 @@ function BarCard({ title, subtitle, color, borderColor, data, dataKey, unit }) {
 
 function CsvCard({ label, sub, FileIconComp, color, dim, border, file, preview, error, inputRef, onChange }) {
   return (
-    <div onClick={() => inputRef.current?.click()}
+    <div onClick={() => { suppressNextAd(); inputRef.current?.click(); }}
       style={{ flex:1, background: file ? dim : "#111", border:`1.5px solid ${file ? color : C.border2}`,
         borderRadius:20, padding:"22px 12px 18px", cursor:"pointer",
         display:"flex", flexDirection:"column", alignItems:"center", gap:10, minHeight:168 }}>
